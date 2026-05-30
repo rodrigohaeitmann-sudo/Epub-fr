@@ -16,7 +16,7 @@ export interface Book {
   chapters: Chapter[]
 }
 
-export type TrackKey = 'en' | 'pt'
+export type TrackKey = 'fr' | 'pt'
 
 export type Toggles = Record<TrackKey, boolean>
 
@@ -34,7 +34,7 @@ export interface Settings {
   fontScale: number
   fontFamily: 'system' | 'serif' | 'mono'
   speed: number
-  lineOffset: number // visual shift of the PT pane relative to the EN pane, in text lines
+  lineOffset: number // visual shift of the PT pane relative to the FR pane, in text lines
 }
 
 export interface ReadingPos {

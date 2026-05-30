@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { canSpeak, lookup, speak, type WordInfo } from '../lib/dictionary'
+import { translateWord } from '../lib/translate'
 
 interface Props {
   word: string
@@ -9,14 +10,32 @@ interface Props {
 export default function WordPopup({ word, onClose }: Props) {
   const [info, setInfo] = useState<WordInfo | null>(null)
   const [loading, setLoading] = useState(true)
+  const [netTrans, setNetTrans] = useState<string | null>(null)
+  const [netLoading, setNetLoading] = useState(false)
 
   useEffect(() => {
     let alive = true
     setLoading(true)
     setInfo(null)
+    setNetTrans(null)
+    setNetLoading(false)
     lookup(word)
       .then((res) => {
-        if (alive) setInfo(res)
+        if (!alive) return
+        setInfo(res)
+        // Offline dictionary has phonetics but no gloss: fetch FR->PT online.
+        if (res.translations.length === 0) {
+          setNetLoading(true)
+          translateWord(res.word || word)
+            .then((pt) => {
+              if (alive && pt && pt.toLowerCase() !== (res.word || word).toLowerCase()) {
+                setNetTrans(pt)
+              }
+            })
+            .finally(() => {
+              if (alive) setNetLoading(false)
+            })
+        }
       })
       .catch(() => {
         if (alive) setInfo({ word, matched: null, ipa: null, translations: [] })
@@ -59,8 +78,14 @@ export default function WordPopup({ word, onClose }: Props) {
                   <li key={i}>{t}</li>
                 ))}
               </ul>
+            ) : netTrans ? (
+              <ul className="word-sheet-trans">
+                <li>{netTrans}</li>
+              </ul>
+            ) : netLoading ? (
+              <p className="word-sheet-status">Traduzindo…</p>
             ) : (
-              <p className="word-sheet-status">Tradução não encontrada no dicionário offline.</p>
+              <p className="word-sheet-status">Tradução não encontrada.</p>
             )}
           </>
         )}

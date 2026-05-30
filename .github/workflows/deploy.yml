@@ -3,7 +3,7 @@ name: Deploy to GitHub Pages
 on:
   push:
     branches:
-      - claude/epub-audiobook-webapp-QMcd3
+      - claude/epub-fr-french-setup-FbKQM
   workflow_dispatch:
 
 permissions:

@@ -4,7 +4,7 @@
   --accent: #4f8cff;
   --text: #f2f4f8;
   --muted: #9aa3b2;
-  --en: #f2f4f8;
+  --fr: #f2f4f8;
   --pt: #8ad6a0;
   --ipa: #ffd479;
 }
@@ -322,8 +322,8 @@ button {
   background: rgba(79, 140, 255, 0.16);
 }
 
-.para-en {
-  color: var(--en);
+.para-fr {
+  color: var(--fr);
   font-size: calc(18px * var(--sub-scale, 1));
   font-weight: 500;
   line-height: 1.55;
@@ -636,7 +636,7 @@ button {
   color: #fff;
 }
 
-/* ---------- Tappable English words ---------- */
+/* ---------- Tappable French words ---------- */
 .word {
   font: inherit;
   color: inherit;

@@ -48,10 +48,10 @@ export default function FileSetup({ onReady }: Props) {
 
   return (
     <div className="setup">
-      <h1>Leitor de Audiobook</h1>
+      <h1>Leitor de Audiobook · FR</h1>
       <p className="setup-hint">
-        Selecione um EPUB em inglês e o áudio do audiobook. A tradução em português é
-        gerada dentro do app conforme você lê.
+        Selecione um EPUB em francês e o áudio do audiobook. A tradução para o português e
+        a fonética (AFI) são geradas dentro do app conforme você lê.
       </p>
 
       <label className="file-field">

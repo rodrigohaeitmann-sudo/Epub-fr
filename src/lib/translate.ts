@@ -1,8 +1,8 @@
-// EN -> PT translation. Prefers Chrome's on-device Translator API (desktop
+// FR -> PT translation. Prefers Chrome's on-device Translator API (desktop
 // Chrome/Edge); falls back to a free network translation when the on-device
 // API is unavailable (e.g. Android, Safari, Firefox).
 
-const SOURCE = 'en'
+const SOURCE = 'fr'
 const TARGET = 'pt'
 
 function getStatic(): TranslatorStatic | undefined {
@@ -79,6 +79,18 @@ async function networkTranslate(text: string): Promise<string> {
     results.push(out)
   }
   return results.join('')
+}
+
+// Single-word FR -> PT via the network, used by the word popup when the
+// offline dictionary has phonetics but no translation. Returns '' on failure.
+export async function translateWord(word: string): Promise<string> {
+  const w = word.trim()
+  if (!w) return ''
+  try {
+    return (await networkTranslate(w)).trim()
+  } catch {
+    return ''
+  }
 }
 
 export interface TranslateProgress {

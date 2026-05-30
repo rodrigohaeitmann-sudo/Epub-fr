@@ -16,7 +16,7 @@ import SettingsPanel from './components/SettingsPanel'
 
 const TOGGLES_KEY = 'epub.toggles'
 const SETTINGS_KEY = 'epub.settings'
-const DEFAULT_TOGGLES: Toggles = { en: true, pt: true }
+const DEFAULT_TOGGLES: Toggles = { fr: true, pt: true }
 const DEFAULT_SETTINGS: Settings = { fontScale: 1, fontFamily: 'system', speed: 1, lineOffset: 0 }
 
 const FONT_STACKS: Record<Settings['fontFamily'], string> = {
