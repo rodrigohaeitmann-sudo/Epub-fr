@@ -13,7 +13,7 @@ interface Props {
   status?: string | null
 }
 
-const HAS_LETTER = /[a-zA-Z]/
+const HAS_LETTER = /\p{L}/u
 const OVERLAY_HIDE_MS = 2800
 
 // Drop surrounding punctuation/quotes, keep apostrophes/hyphens inside the word.
@@ -21,7 +21,7 @@ function cleanWord(tok: string): string {
   return tok.replace(/^[^\p{L}]+/u, '').replace(/[^\p{L}]+$/u, '')
 }
 
-function EnglishText({ text, onWord }: { text: string; onWord: (w: string) => void }) {
+function FrenchText({ text, onWord }: { text: string; onWord: (w: string) => void }) {
   const tokens = text.split(/(\s+)/)
   return (
     <>
@@ -60,7 +60,7 @@ export default function ReaderPanel({
   const lastChapterId = useRef<string | null>(null)
   const hideTimer = useRef<number | null>(null)
 
-  const showEn = toggles.en
+  const showEn = toggles.fr
   const showPt = toggles.pt
   const dual = showEn && showPt
 
@@ -218,7 +218,7 @@ export default function ReaderPanel({
 
         {showEn && (
           <div
-            className={`pane pane-en ${dual ? '' : 'pane-solo'}`}
+            className={`pane pane-fr ${dual ? '' : 'pane-solo'}`}
             ref={enRef}
             onScroll={dual ? syncFromEn : undefined}
           >
@@ -231,8 +231,8 @@ export default function ReaderPanel({
                 className={`para ${i === activeParagraph ? 'para-active' : ''}`}
                 onClick={() => onSelectParagraph(i)}
               >
-                <p className="para-en">
-                  <EnglishText text={text} onWord={setSelected} />
+                <p className="para-fr">
+                  <FrenchText text={text} onWord={setSelected} />
                 </p>
               </div>
             ))}

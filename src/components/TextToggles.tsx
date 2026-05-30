@@ -6,7 +6,7 @@ interface Props {
 }
 
 const LABELS: Record<TrackKey, string> = {
-  en: 'EN',
+  fr: 'FR',
   pt: 'PT',
 }
 

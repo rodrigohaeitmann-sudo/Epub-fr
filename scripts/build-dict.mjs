@@ -1,22 +1,46 @@
-// Converts the FreeDict eng-por TEI dictionary into a compact JSON lookup
-// used by the in-app word popup (offline EN->PT translation + IPA).
+// Builds the compact French dictionary used by the in-app word popup
+// (offline FR phonetics + FR->PT translation).
 //
-// Source: https://github.com/freedict/fd-dictionaries (eng-por, GPL-2.0+).
-// Usage: node scripts/build-dict.mjs <path-to-eng-por.tei>
+// Output shape (src/data/fr-pt.json):
+//   { "maison": { "i": "mɛzɔ̃", "t": ["casa"] }, ... }
+//   i = French IPA (optional), t = list of Portuguese translations (optional).
 //
-// Output shape (src/data/en-pt.json):
-//   { "house": { "i": "haʊs", "t": ["casa"] }, ... }
-//   i = IPA (optional), t = list of Portuguese translations.
+// French IPA is the headline feature, so phonetics come from the large
+// open-dict-data/ipa-dict French list (~245k surface forms incl. inflections),
+// pruned to the most frequent words for a reasonable bundle size.
+//
+// FR->PT glosses are bridged FR -> EN -> PT: FreeDict fra-eng gives English
+// glosses (and a French IPA fallback), then the existing English->Portuguese
+// table (src/data/en-pt.json) maps those glosses to Portuguese.
+//
+// Sources (all GPL-compatible / open data):
+//   - open-dict-data/ipa-dict           fr_FR.txt   (French IPA)
+//   - hermitdave/FrequencyWords         fr_50k.txt  (frequency prune)
+//   - freedict/fd-dictionaries          fra-eng.tei (FR->EN + IPA fallback)
+//   - src/data/en-pt.json               (EN->PT bridge, already in repo)
+//
+// Usage: node scripts/build-dict.mjs
+// Optional overrides via env: IPA_SRC, FREQ_SRC, FRAENG_SRC (local file paths).
 
-import { readFileSync, writeFileSync } from 'node:fs'
+import { readFileSync, writeFileSync, existsSync } from 'node:fs'
 
-const src = process.argv[2]
-if (!src) {
-  console.error('usage: node scripts/build-dict.mjs <eng-por.tei>')
-  process.exit(1)
+const IPA_URL = 'https://raw.githubusercontent.com/open-dict-data/ipa-dict/master/data/fr_FR.txt'
+const FREQ_URL =
+  'https://raw.githubusercontent.com/hermitdave/FrequencyWords/master/content/2018/fr/fr_50k.txt'
+const FRAENG_URL =
+  'https://raw.githubusercontent.com/freedict/fd-dictionaries/master/fra-eng/fra-eng.tei'
+
+// Keep the IPA-only headwords to the N most frequent words. Words that also
+// get a Portuguese gloss are always kept, regardless of rank.
+const FREQ_LIMIT = 45000
+
+async function source(envKey, url) {
+  const local = process.env[envKey]
+  if (local && existsSync(local)) return readFileSync(local, 'utf8')
+  const res = await fetch(url)
+  if (!res.ok) throw new Error(`fetch ${url} -> ${res.status}`)
+  return res.text()
 }
-
-const xml = readFileSync(src, 'utf8')
 
 function decode(s) {
   return s
@@ -28,44 +52,106 @@ function decode(s) {
     .trim()
 }
 
-const body = xml.slice(xml.indexOf('<body>'), xml.indexOf('</body>'))
-const entries = body.match(/<entry>[\s\S]*?<\/entry>/g) ?? []
+// Lowercase, normalise apostrophes; keep French letters/apostrophes/hyphens.
+function norm(s) {
+  return s.toLowerCase().replace(/[’‘]/g, "'").trim()
+}
 
-const dict = Object.create(null)
+console.error('· loading sources…')
+const [ipaTxt, freqTxt, fraEngXml, enPtRaw] = await Promise.all([
+  source('IPA_SRC', IPA_URL),
+  source('FREQ_SRC', FREQ_URL),
+  source('FRAENG_SRC', FRAENG_URL),
+  Promise.resolve(readFileSync('src/data/en-pt.json', 'utf8')),
+])
 
-for (const entry of entries) {
-  const orthMatch = entry.match(/<orth>([\s\S]*?)<\/orth>/)
-  if (!orthMatch) continue
-  const word = decode(orthMatch[1]).toLowerCase()
+const enPt = JSON.parse(enPtRaw)
+
+// --- French IPA (first pronunciation only) -------------------------------
+const ipa = new Map()
+for (const line of ipaTxt.split('\n')) {
+  const tab = line.indexOf('\t')
+  if (tab < 0) continue
+  const word = norm(line.slice(0, tab))
   if (!word) continue
+  const prons = line.slice(tab + 1).trim()
+  const first = prons.split(',')[0].replace(/\//g, '').trim()
+  if (first && !ipa.has(word)) ipa.set(word, first)
+}
+console.error(`· ${ipa.size} French IPA forms`)
 
-  const pronMatch = entry.match(/<pron>([\s\S]*?)<\/pron>/)
-  const ipa = pronMatch ? decode(pronMatch[1]) : ''
+// --- Frequency rank ------------------------------------------------------
+const rank = new Map()
+let r = 0
+for (const line of freqTxt.split('\n')) {
+  const word = norm(line.split(' ')[0])
+  if (word && !rank.has(word)) rank.set(word, r++)
+}
+console.error(`· ${rank.size} frequency-ranked words`)
 
-  const translations = []
+// --- FR -> EN (FreeDict) with French IPA fallback ------------------------
+const fraEng = new Map() // french -> { glosses:Set, pron:string }
+const body = fraEngXml.slice(fraEngXml.indexOf('<body>'), fraEngXml.indexOf('</body>'))
+for (const entry of body.match(/<entry>[\s\S]*?<\/entry>/g) ?? []) {
+  const orth = entry.match(/<orth>([\s\S]*?)<\/orth>/)
+  if (!orth) continue
+  const word = norm(decode(orth[1]))
+  if (!word) continue
+  const pron = entry.match(/<pron>([\s\S]*?)<\/pron>/)
+  const glosses = new Set()
   for (const cit of entry.match(/<cit type="trans">[\s\S]*?<\/cit>/g) ?? []) {
     const q = cit.match(/<quote>([\s\S]*?)<\/quote>/)
     if (q) {
-      const t = decode(q[1])
-      if (t && !translations.includes(t)) translations.push(t)
+      const g = decode(q[1]).toLowerCase()
+      if (g) glosses.add(g)
     }
   }
+  const cur = fraEng.get(word) ?? { glosses: new Set(), pron: '' }
+  for (const g of glosses) cur.glosses.add(g)
+  if (!cur.pron && pron) cur.pron = decode(pron[1])
+  fraEng.set(word, cur)
+}
+console.error(`· ${fraEng.size} FR->EN headwords`)
 
-  if (translations.length === 0 && !ipa) continue
-
-  const existing = dict[word]
-  if (existing) {
-    for (const t of translations) if (!existing.t.includes(t)) existing.t.push(t)
-    if (!existing.i && ipa) existing.i = ipa
-  } else {
-    const value = { t: translations }
-    if (ipa) value.i = ipa
-    dict[word] = value
+// --- Bridge FR -> EN -> PT ----------------------------------------------
+function bridgeToPt(glosses) {
+  const out = []
+  for (const g of glosses) {
+    const e = enPt[g]
+    if (e && Array.isArray(e.t)) {
+      for (const t of e.t) if (!out.includes(t)) out.push(t)
+    }
+    if (out.length >= 6) break
   }
+  return out.slice(0, 6)
 }
 
-const out = 'src/data/en-pt.json'
-writeFileSync(out, JSON.stringify(dict))
+// --- Assemble ------------------------------------------------------------
+const dict = Object.create(null)
+
+// Every French word that earns a Portuguese gloss (always kept).
+for (const [word, info] of fraEng) {
+  const t = bridgeToPt(info.glosses)
+  if (t.length === 0) continue
+  const i = ipa.get(word) || (info.pron ? norm(info.pron) : '')
+  dict[word] = i ? { i, t } : { t }
+}
+
+// Frequent words: add IPA-only entries for the rest.
+const ranked = [...rank.entries()].filter(([w]) => w.length >= 2 && ipa.has(w))
+ranked.sort((a, b) => a[1] - b[1])
+for (const [word] of ranked.slice(0, FREQ_LIMIT)) {
+  if (dict[word]) continue
+  dict[word] = { i: ipa.get(word) }
+}
+
+const out = 'src/data/fr-pt.json'
+const json = JSON.stringify(dict)
+writeFileSync(out, json)
 const count = Object.keys(dict).length
-const bytes = Buffer.byteLength(JSON.stringify(dict))
-console.log(`wrote ${count} entries to ${out} (${(bytes / 1024 / 1024).toFixed(2)} MB)`)
+const withT = Object.values(dict).filter((e) => e.t && e.t.length).length
+const withI = Object.values(dict).filter((e) => e.i).length
+console.error(
+  `✓ wrote ${count} entries to ${out} ` +
+    `(${withI} with IPA, ${withT} with PT) — ${(Buffer.byteLength(json) / 1024 / 1024).toFixed(2)} MB`,
+)
