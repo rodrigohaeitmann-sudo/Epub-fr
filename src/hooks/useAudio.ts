@@ -36,7 +36,7 @@ export function useAudio(bookId?: string) {
   useEffect(() => {
     const audio = audioRef.current
     if (!audio || !bookId) return
-    const key = `epub.progress.${bookId}`
+    const key = `epub-fr.progress.${bookId}`
 
     const restore = () => {
       const saved = Number(localStorage.getItem(key))

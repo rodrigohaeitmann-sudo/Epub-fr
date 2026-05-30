@@ -14,8 +14,10 @@ import AudioChapterNav from './components/AudioChapterNav'
 import SearchPanel from './components/SearchPanel'
 import SettingsPanel from './components/SettingsPanel'
 
-const TOGGLES_KEY = 'epub.toggles'
-const SETTINGS_KEY = 'epub.settings'
+// All persisted keys are namespaced to this French edition so they don't
+// collide with the other reader app served from the same github.io origin.
+const TOGGLES_KEY = 'epub-fr.toggles'
+const SETTINGS_KEY = 'epub-fr.settings'
 const DEFAULT_TOGGLES: Toggles = { fr: true, pt: true }
 const DEFAULT_SETTINGS: Settings = { fontScale: 1, fontFamily: 'system', speed: 1, lineOffset: 0 }
 
@@ -38,7 +40,7 @@ function loadJson<T>(key: string, fallback: T): T {
 function loadPos(bookId?: string): ReadingPos {
   if (!bookId) return { chapter: 0, paragraph: 0 }
   try {
-    const raw = localStorage.getItem(`epub.pos.${bookId}`)
+    const raw = localStorage.getItem(`epub-fr.pos.${bookId}`)
     if (raw) return JSON.parse(raw)
   } catch {
     /* ignore */
@@ -150,7 +152,7 @@ export default function App() {
 
   useEffect(() => {
     const id = media?.bookId
-    if (id) localStorage.setItem(`epub.pos.${id}`, JSON.stringify(pos))
+    if (id) localStorage.setItem(`epub-fr.pos.${id}`, JSON.stringify(pos))
   }, [pos, media?.bookId])
 
   useEffect(() => {
