@@ -513,9 +513,50 @@ button {
 }
 
 .setting-label {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
   font-size: 13px;
   font-weight: 600;
   color: var(--muted);
+}
+
+.setting-value {
+  color: var(--accent);
+  font-size: 15px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.speed-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.speed-slider {
+  flex: 1;
+  height: 28px;
+  accent-color: var(--accent);
+}
+
+.speed-btn {
+  flex: 0 0 auto;
+  background: #232733;
+  color: var(--text);
+  border: none;
+  border-radius: 50%;
+  width: 40px;
+  height: 40px;
+  font-size: 22px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.speed-btn:disabled {
+  opacity: 0.35;
 }
 
 .opt-row {
