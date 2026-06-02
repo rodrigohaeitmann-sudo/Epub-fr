@@ -76,16 +76,57 @@ export default function ReaderPanel({
     return lineOffset * lineHeightPx()
   }
 
-  // Two-way scroll sync between panes, with the PT pane offset by N lines.
+  // Paragraph-aligned scroll sync. The panes hold the same paragraphs at the
+  // same indices, but their heights differ wildly (especially when the PT pane
+  // is only partially translated). Mapping by total-height ratio would drift,
+  // so we anchor on the topmost visible paragraph and place its counterpart at
+  // the same viewport position in the other pane.
+
+  // Last paragraph whose top is at/above the given scrollTop (binary search;
+  // offsetTop is monotonic since paragraphs stack vertically).
+  function anchorIndex(paras: Array<HTMLDivElement | null>, scrollTop: number): number {
+    let lo = 0
+    let hi = paras.length - 1
+    let ans = 0
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1
+      const el = paras[mid]
+      if (el && el.offsetTop <= scrollTop) {
+        ans = mid
+        lo = mid + 1
+      } else {
+        hi = mid - 1
+      }
+    }
+    return ans
+  }
+
+  function syncPanes(
+    src: HTMLDivElement,
+    srcParas: Array<HTMLDivElement | null>,
+    dst: HTMLDivElement,
+    dstParas: Array<HTMLDivElement | null>,
+    extraOffset: number,
+  ) {
+    const idx = anchorIndex(srcParas, src.scrollTop)
+    const sEl = srcParas[idx]
+    const dEl = dstParas[idx]
+    if (!sEl || !dEl) return
+    // How far we've scrolled into the anchor paragraph (0..1), carried over so
+    // motion stays smooth within a paragraph rather than jumping at edges.
+    const frac = sEl.offsetHeight > 0 ? (src.scrollTop - sEl.offsetTop) / sEl.offsetHeight : 0
+    const clamped = Math.max(0, Math.min(1, frac))
+    const dstMax = dst.scrollHeight - dst.clientHeight
+    const target = dEl.offsetTop + clamped * dEl.offsetHeight + extraOffset
+    dst.scrollTop = Math.max(0, Math.min(dstMax, target))
+  }
+
   function syncFromEn() {
     const en = enRef.current
     const pt = ptRef.current
     if (!en || !pt || syncing.current) return
     syncing.current = true
-    const enMax = en.scrollHeight - en.clientHeight
-    const ptMax = pt.scrollHeight - pt.clientHeight
-    const ratio = enMax > 0 ? en.scrollTop / enMax : 0
-    pt.scrollTop = Math.max(0, Math.min(ptMax, ratio * ptMax + offsetPx()))
+    syncPanes(en, enParas.current, pt, ptParas.current, offsetPx())
     requestAnimationFrame(() => {
       syncing.current = false
     })
@@ -96,10 +137,7 @@ export default function ReaderPanel({
     const pt = ptRef.current
     if (!en || !pt || syncing.current) return
     syncing.current = true
-    const enMax = en.scrollHeight - en.clientHeight
-    const ptMax = pt.scrollHeight - pt.clientHeight
-    const ratio = ptMax > 0 ? (pt.scrollTop - offsetPx()) / ptMax : 0
-    en.scrollTop = Math.max(0, Math.min(enMax, ratio * enMax))
+    syncPanes(pt, ptParas.current, en, enParas.current, -offsetPx())
     requestAnimationFrame(() => {
       syncing.current = false
     })
