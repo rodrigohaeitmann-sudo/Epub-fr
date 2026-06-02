@@ -1,5 +1,13 @@
-import { useEffect, useRef, useState, type CSSProperties } from 'react'
-import type { LoadedBook, ReadingPos, Settings, Toggles, TrackKey, Translations } from './types'
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react'
+import type {
+  Chapter,
+  LoadedBook,
+  ReadingPos,
+  Settings,
+  Toggles,
+  TrackKey,
+  Translations,
+} from './types'
 import { useAudio } from './hooks/useAudio'
 import { loadSession, loadTranslations, saveTranslation, saveSession } from './lib/sessionStore'
 import { translateParagraphs } from './lib/translate'
@@ -18,6 +26,11 @@ import SettingsPanel from './components/SettingsPanel'
 // collide with the other reader app served from the same github.io origin.
 const TOGGLES_KEY = 'epub-fr.toggles'
 const SETTINGS_KEY = 'epub-fr.settings'
+
+// Translate in blocks of this many paragraphs. Big books with no chapter
+// division are one huge "chapter"; translating it whole is slow, so we
+// translate one block on open and let the user extend on demand.
+const BLOCK_SIZE = 100
 const DEFAULT_TOGGLES: Toggles = { fr: true, pt: true }
 const DEFAULT_SETTINGS: Settings = { fontScale: 1, fontFamily: 'system', speed: 1, lineOffset: 0 }
 
@@ -55,12 +68,18 @@ export default function App() {
   const [settings, setSettings] = useState<Settings>(() => loadJson(SETTINGS_KEY, DEFAULT_SETTINGS))
   const [pos, setPos] = useState<ReadingPos>({ chapter: 0, paragraph: 0 })
   const [translations, setTranslations] = useState<Translations>({})
+  const [transLoadedFor, setTransLoadedFor] = useState<string | null>(null)
   const [transStatus, setTransStatus] = useState<string | null>(null)
   const [showSettings, setShowSettings] = useState(false)
   const [showChapters, setShowChapters] = useState(false)
   const [showAudioChapters, setShowAudioChapters] = useState(false)
   const [showSearch, setShowSearch] = useState(false)
   const inFlight = useRef<Set<string>>(new Set())
+  // Latest translations, readable inside async callbacks without stale closures.
+  const translationsRef = useRef<Translations>(translations)
+  useEffect(() => {
+    translationsRef.current = translations
+  }, [translations])
 
   const { audioRef, currentTime, duration, isPlaying, togglePlay, seekTo, skipBy } = useAudio(
     media?.bookId,
@@ -141,13 +160,17 @@ export default function App() {
   }, [])
 
   // Load reading position + cached translations whenever the book changes.
+  // transLoadedFor gates auto-translation so it never races (and clobbers) the
+  // cached translations still coming back from IndexedDB.
   useEffect(() => {
     const id = media?.bookId
     if (!id) return
+    setTransLoadedFor(null)
     setPos(loadPos(id))
     loadTranslations(id)
-      .then(setTranslations)
+      .then((t) => setTranslations(t))
       .catch(() => setTranslations({}))
+      .finally(() => setTransLoadedFor(id))
   }, [media?.bookId])
 
   useEffect(() => {
@@ -173,38 +196,93 @@ export default function App() {
   const chapter = chapters[chapterIndex] ?? null
   const paraCount = chapter?.paragraphs.length ?? 0
   const paragraphIndex = Math.min(Math.max(pos.paragraph, 0), Math.max(0, paraCount - 1))
+  const chapterTranslation = chapter ? translations[chapter.id] : undefined
+  const translatedCount = chapterTranslation
+    ? chapterTranslation.reduce((n, s) => (typeof s === 'string' ? n + 1 : n), 0)
+    : 0
 
-  // Translate the current chapter on demand when PT is enabled.
+  // Index of the first not-yet-translated paragraph at or after `from`, or -1.
+  const firstUntranslatedFrom = useCallback((ch: Chapter, from: number): number => {
+    const arr = translationsRef.current[ch.id] ?? []
+    for (let i = Math.max(0, from); i < ch.paragraphs.length; i++) {
+      if (typeof arr[i] !== 'string') return i
+    }
+    return -1
+  }, [])
+
+  // Translate one block of up to BLOCK_SIZE paragraphs starting at `start`,
+  // skipping any already done. Fills the translation array in place and caches.
+  const translateBlock = useCallback(
+    async (ch: Chapter, start: number) => {
+      if (inFlight.current.has(ch.id)) return
+      const total = ch.paragraphs.length
+      if (total === 0) return
+      const from = Math.max(0, Math.min(start, total - 1))
+      const end = Math.min(total, from + BLOCK_SIZE)
+      const base = (translationsRef.current[ch.id] ?? []).slice()
+      const indices: number[] = []
+      for (let i = from; i < end; i++) if (typeof base[i] !== 'string') indices.push(i)
+      if (indices.length === 0) {
+        setTransStatus(null)
+        return
+      }
+
+      inFlight.current.add(ch.id)
+      setTransStatus('Preparando tradução…')
+      try {
+        const texts = indices.map((i) => ch.paragraphs[i])
+        const pt = await translateParagraphs(
+          texts,
+          (p) => setTransStatus(`Traduzindo… ${p.done}/${p.total}`),
+          (loaded) => setTransStatus(`Baixando modelo de tradução… ${Math.round(loaded * 100)}%`),
+        )
+        indices.forEach((idx, k) => {
+          base[idx] = pt[k] ?? ''
+        })
+        translationsRef.current = { ...translationsRef.current, [ch.id]: base }
+        setTranslations((t) => ({ ...t, [ch.id]: base }))
+        const bookId = media?.bookId
+        if (bookId) void saveTranslation(bookId, ch.id, base).catch(() => {})
+        setTransStatus(null)
+      } catch (e) {
+        setTransStatus(e instanceof Error ? e.message : 'Falha na tradução.')
+      } finally {
+        inFlight.current.delete(ch.id)
+      }
+    },
+    [media],
+  )
+
+  // On opening a chapter with PT enabled, translate just the first block
+  // (anchored at the current paragraph) instead of the whole thing.
   useEffect(() => {
     if (!media || !toggles.pt || !chapter) {
       setTransStatus(null)
       return
     }
-    if (translations[chapter.id]) {
+    // Wait for the cached translations to finish loading for this book.
+    if (transLoadedFor !== media.bookId) return
+    const start = firstUntranslatedFrom(chapter, paragraphIndex)
+    if (start < 0) {
       setTransStatus(null)
       return
     }
-    if (inFlight.current.has(chapter.id)) return
+    void translateBlock(chapter, start)
+    // Only re-run when the chapter or PT toggle changes, not on every position
+    // change — extending the translation past the first block is manual.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [media?.bookId, toggles.pt, chapter?.id, transLoadedFor])
 
-    inFlight.current.add(chapter.id)
-    setTransStatus('Preparando tradução…')
-    translateParagraphs(
-      chapter.paragraphs,
-      (p) => setTransStatus(`Traduzindo… ${p.done}/${p.total}`),
-      (loaded) => setTransStatus(`Baixando modelo de tradução… ${Math.round(loaded * 100)}%`),
-    )
-      .then((pt) => {
-        setTranslations((t) => ({ ...t, [chapter.id]: pt }))
-        void saveTranslation(media.bookId, chapter.id, pt).catch(() => {})
-        setTransStatus(null)
-      })
-      .catch((e) => {
-        setTransStatus(e instanceof Error ? e.message : 'Falha na tradução.')
-      })
-      .finally(() => {
-        inFlight.current.delete(chapter.id)
-      })
-  }, [media, toggles.pt, chapter, translations])
+  // Continue translating the next block, starting from the current paragraph.
+  function handleTranslateMore() {
+    if (!chapter) return
+    const start = firstUntranslatedFrom(chapter, paragraphIndex)
+    if (start < 0) {
+      setTransStatus('Tudo já traduzido a partir daqui.')
+      return
+    }
+    void translateBlock(chapter, start)
+  }
 
   function handleToggle(key: TrackKey) {
     setToggles((t) => ({ ...t, [key]: !t[key] }))
@@ -303,6 +381,11 @@ export default function App() {
           settings={settings}
           onChange={setSettings}
           onClose={() => setShowSettings(false)}
+          translatedCount={translatedCount}
+          totalParagraphs={paraCount}
+          currentParagraph={paragraphIndex}
+          transStatus={transStatus}
+          onTranslateMore={handleTranslateMore}
         />
       )}
     </div>

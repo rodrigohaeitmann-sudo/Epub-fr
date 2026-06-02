@@ -4,6 +4,11 @@ interface Props {
   settings: Settings
   onChange: (settings: Settings) => void
   onClose: () => void
+  translatedCount: number
+  totalParagraphs: number
+  currentParagraph: number
+  transStatus: string | null
+  onTranslateMore: () => void
 }
 
 const SCALES: { label: string; value: number }[] = [
@@ -35,8 +40,19 @@ function formatSpeed(v: number): string {
   return `${v.toFixed(2).replace(/\.?0+$/, '').replace('.', ',')}×`
 }
 
-export default function SettingsPanel({ settings, onChange, onClose }: Props) {
+export default function SettingsPanel({
+  settings,
+  onChange,
+  onClose,
+  translatedCount,
+  totalParagraphs,
+  currentParagraph,
+  transStatus,
+  onTranslateMore,
+}: Props) {
   const set = (patch: Partial<Settings>) => onChange({ ...settings, ...patch })
+  const busy = !!transStatus && transStatus !== 'Tudo já traduzido a partir daqui.'
+  const allDone = totalParagraphs > 0 && translatedCount >= totalParagraphs
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
@@ -111,6 +127,31 @@ export default function SettingsPanel({ settings, onChange, onClose }: Props) {
               +
             </button>
           </div>
+        </div>
+
+        <div className="setting">
+          <span className="setting-label">
+            Tradução
+            <span className="setting-value">
+              {translatedCount}/{totalParagraphs}
+            </span>
+          </span>
+          <button
+            className="opt"
+            disabled={busy || allDone}
+            onClick={onTranslateMore}
+          >
+            {allDone
+              ? 'Tudo traduzido'
+              : busy
+                ? 'Traduzindo…'
+                : 'Traduzir +100 a partir daqui'}
+          </button>
+          <span className="setting-hint">
+            {transStatus
+              ? transStatus
+              : `Traduz em blocos de 100 parágrafos, começando no parágrafo atual (#${currentParagraph + 1}).`}
+          </span>
         </div>
 
       </div>

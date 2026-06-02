@@ -528,6 +528,12 @@ button {
   font-variant-numeric: tabular-nums;
 }
 
+.setting-hint {
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.4;
+}
+
 .speed-row {
   display: flex;
   align-items: center;
