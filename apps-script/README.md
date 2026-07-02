@@ -38,7 +38,7 @@ O script `Code.gs` cria e mantém duas abas:
 
 1. Abra sua planilha no Google Sheets.
 2. Acesse **Extensões → Apps Script**.
-3. Cole o conteúdo de `google-apps-script/Code.gs` no editor.
+3. Cole o conteúdo de `apps-script/Code.gs` no editor.
 4. Salve o projeto.
 5. Execute a função `ensureSchema_` uma vez para criar/validar as abas.
 6. Publique em **Implantar → Nova implantação → App da Web**.
