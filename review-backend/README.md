@@ -47,7 +47,7 @@ Também são aceitos nomes equivalentes como `expression`, `translation`, `conte
 
 1. Abra sua planilha no Google Sheets.
 2. Acesse **Extensões → Apps Script**.
-3. Cole o conteúdo de `google-sheets-review/Code.gs` no editor.
+3. Cole o conteúdo de `review-backend/Code.gs` no editor.
 4. Salve o projeto.
 5. Execute a função `ensureSchema_` uma vez. Ela valida se `palavras` existe e cria apenas a aba `Progresso` se necessário.
 6. Publique em **Implantar → Nova implantação → App da Web**.
