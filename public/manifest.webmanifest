@@ -1,7 +1,7 @@
 {
-  "name": "Novo App",
-  "short_name": "Novo App",
-  "description": "Base limpa para criação de um novo aplicativo.",
+  "name": "Revisão EN·FR",
+  "short_name": "Revisão",
+  "description": "Revisão espaçada de palavras e expressões em inglês e francês salvas na planilha.",
   "start_url": ".",
   "scope": ".",
   "display": "standalone",
