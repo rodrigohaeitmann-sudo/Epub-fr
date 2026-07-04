@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - claude/epub-fr-french-setup-FbKQM
+      - claude/spaced-repetition-language-app-gzwifb
   workflow_dispatch:
 
 permissions:

@@ -1,193 +1,231 @@
-const EXPRESSIONS_SHEET = 'Expressoes'
+/**
+ * Backend de revisão espaçada — Google Apps Script.
+ *
+ * Instale este script DENTRO da planilha de vocabulário (Extensões → Apps Script)
+ * e publique como App da Web (veja apps-script/README.md).
+ *
+ * A PRIMEIRA aba da planilha é a fonte das palavras/expressões e NUNCA é
+ * modificada por este script. Colunas reconhecidas (a ordem não importa):
+ *   Texto | Tipo | IPA | Traduções | Contexto | Capítulo | Fonte |
+ *   Salva em (app) | Recebida em | ID | Idioma (opcional)
+ *
+ * O progresso do usuário é gravado na aba "Progresso", criada automaticamente.
+ */
+
 const PROGRESS_SHEET = 'Progresso'
-const DEFAULT_INTERVALS = [0, 1, 3, 7, 14, 30, 60, 120]
+const PROGRESS_HEADERS = [
+  'id', 'texto', 'caixa', 'repeticoes', 'dificeis',
+  'ultimaResposta', 'ultimaRevisao', 'proximaRevisao', 'atualizadoEm',
+]
+
+// Escada de intervalos (dias) por caixa. "Tempo padrão" sobe 1 caixa,
+// "muito tempo" sobe 2, "pouco tempo" desce 1 e volta amanhã.
+const INTERVALS = [1, 3, 7, 16, 35, 70, 140]
+const SHORT_INTERVAL_DAYS = 1
 
 function doGet(event) {
-  ensureSchema_()
-  const params = event.parameter || {}
-  const action = params.action || 'due'
-
-  if (action === 'all') return json_(getAllCards_())
-  if (action === 'progress') return json_(getProgress_(params))
-  if (action === 'stats') return json_(getStats_())
-  if (action === 'schema') return json_(getSchema_())
-  return json_(getDueCards_(params))
+  try {
+    const params = (event && event.parameter) || {}
+    const action = params.action || 'cards'
+    if (action === 'ping') return json_({ ok: true, version: 2 })
+    if (action === 'cards') return json_({ ok: true, today: dateKey_(new Date()), cards: getCards_() })
+    return json_({ ok: false, error: 'Ação desconhecida: ' + action })
+  } catch (error) {
+    return json_({ ok: false, error: String(error && error.message ? error.message : error) })
+  }
 }
 
 function doPost(event) {
-  ensureSchema_()
-  const payload = JSON.parse((event.postData && event.postData.contents) || '{}')
-  if (payload.action === 'review') return json_(saveReview_(payload))
-  if (payload.action === 'upsertExpression') return json_(upsertExpression_(payload.expression || {}))
-  throw new Error('Ação inválida. Use action=review ou action=upsertExpression.')
-}
-
-function getDueCards_(params) {
-  const today = toDateKey_(new Date())
-  const language = params.language || 'all'
-  return getAllCards_().filter((card) => {
-    const matchesLanguage = language === 'all' || card.language === language
-    return matchesLanguage && card.nextReview <= today
-  })
-}
-
-function getProgress_(params) {
-  const rows = readTable_(PROGRESS_SHEET).map((row) => ({
-    expressionId: String(row.expressionId || ''),
-    box: Number(row.box || 1),
-    repetitions: Number(row.repetitions || 0),
-    lapses: Number(row.lapses || 0),
-    lastResult: row.lastResult || '',
-    lastReviewedAt: formatMaybeDate_(row.lastReviewedAt),
-    nextReview: formatMaybeDate_(row.nextReview),
-    updatedAt: row.updatedAt || '',
-  }))
-
-  if (params.expressionId) {
-    return rows.find((row) => row.expressionId === String(params.expressionId)) || null
-  }
-
-  return rows
-}
-
-function getStats_() {
-  const cards = getAllCards_()
-  const today = toDateKey_(new Date())
-  const reviewed = cards.filter((card) => card.repetitions > 0)
-  return {
-    totalExpressions: cards.length,
-    dueToday: cards.filter((card) => card.nextReview <= today).length,
-    reviewedExpressions: reviewed.length,
-    totalReviews: reviewed.reduce((sum, card) => sum + card.repetitions, 0),
-    totalLapses: reviewed.reduce((sum, card) => sum + card.lapses, 0),
-    byLanguage: cards.reduce((index, card) => {
-      index[card.language] = (index[card.language] || 0) + 1
-      return index
-    }, {}),
+  try {
+    const payload = JSON.parse((event && event.postData && event.postData.contents) || '{}')
+    if (payload.action === 'review') {
+      return json_({ ok: true, saved: [saveReview_(payload)] })
+    }
+    if (payload.action === 'reviewBatch') {
+      const saved = (payload.reviews || []).map(function (review) { return saveReview_(review) })
+      return json_({ ok: true, saved: saved })
+    }
+    return json_({ ok: false, error: 'Ação desconhecida.' })
+  } catch (error) {
+    return json_({ ok: false, error: String(error && error.message ? error.message : error) })
   }
 }
 
-function getAllCards_() {
-  const expressions = readTable_(EXPRESSIONS_SHEET)
-  const progressById = readTable_(PROGRESS_SHEET).reduce((index, row) => {
-    index[row.expressionId] = row
-    return index
-  }, {})
+// ---------------------------------------------------------------- leitura
 
-  return expressions
-    .filter((row) => row.id && row.expression)
-    .map((row) => {
-      const progress = progressById[row.id] || {}
-      return {
-        id: String(row.id),
-        expression: row.expression,
-        translation: row.translation || '',
-        context: row.context || '',
-        language: normalizeLanguage_(row.language),
-        tags: row.tags || '',
-        box: Number(progress.box || 1),
-        repetitions: Number(progress.repetitions || 0),
-        lapses: Number(progress.lapses || 0),
-        lastResult: progress.lastResult || '',
-        lastReviewedAt: formatMaybeDate_(progress.lastReviewedAt),
-        nextReview: formatMaybeDate_(progress.nextReview) || toDateKey_(new Date()),
-      }
+function getCards_() {
+  const source = sourceSheet_()
+  const values = source.getDataRange().getValues()
+  if (values.length < 2) return []
+
+  const headerIndex = mapHeaders_(values[0])
+  const progressById = readProgress_()
+
+  const cards = []
+  for (let i = 1; i < values.length; i++) {
+    const row = values[i]
+    const text = cell_(row, headerIndex.text)
+    if (!text) continue
+    const id = cell_(row, headerIndex.id) || 'txt:' + text.toLowerCase()
+    const progress = progressById[id] || null
+    cards.push({
+      id: id,
+      text: text,
+      type: cell_(row, headerIndex.type),
+      ipa: cell_(row, headerIndex.ipa),
+      translation: cell_(row, headerIndex.translation),
+      context: cell_(row, headerIndex.context),
+      chapter: cell_(row, headerIndex.chapter),
+      source: cell_(row, headerIndex.source),
+      language: cell_(row, headerIndex.language),
+      box: progress ? Number(progress.caixa) || 0 : 0,
+      repetitions: progress ? Number(progress.repeticoes) || 0 : 0,
+      hardCount: progress ? Number(progress.dificeis) || 0 : 0,
+      lastResult: progress ? String(progress.ultimaResposta || '') : '',
+      lastReviewedAt: progress ? maybeDateKey_(progress.ultimaRevisao) : '',
+      nextReview: progress ? maybeDateKey_(progress.proximaRevisao) : '',
     })
+  }
+  return cards
 }
+
+// ---------------------------------------------------------------- escrita
 
 function saveReview_(payload) {
-  const result = payload.result
-  if (!payload.expressionId || !['again', 'hard', 'good', 'easy'].includes(result)) {
-    throw new Error('Envie expressionId e result: again, hard, good ou easy.')
+  const id = String(payload.id || '').trim()
+  const result = String(payload.result || '').trim()
+  if (!id) throw new Error('Envie o campo id.')
+  if (['short', 'standard', 'long'].indexOf(result) < 0) {
+    throw new Error('result deve ser short, standard ou long.')
   }
 
-  const sheet = SpreadsheetApp.getActive().getSheetByName(PROGRESS_SHEET)
-  const table = readTable_(PROGRESS_SHEET)
-  const rowIndex = table.findIndex((row) => String(row.expressionId) === String(payload.expressionId))
-  const current = rowIndex >= 0 ? table[rowIndex] : {}
-  const currentBox = Number(current.box || 1)
-  const direction = result === 'again' ? -1 : result === 'hard' ? 0 : result === 'good' ? 1 : 2
-  const nextBox = Math.min(DEFAULT_INTERVALS.length - 1, Math.max(1, currentBox + direction))
-  const today = new Date()
-  const nextReview = addDays_(today, result === 'again' ? 0 : DEFAULT_INTERVALS[nextBox])
+  const lock = LockService.getScriptLock()
+  lock.waitLock(10000)
+  try {
+    const sheet = progressSheet_()
+    const finder = sheet.getRange(2, 1, Math.max(sheet.getLastRow() - 1, 1), 1)
+      .createTextFinder(id).matchEntireCell(true).findNext()
 
-  const updated = [
-    String(payload.expressionId),
-    nextBox,
-    Number(current.repetitions || 0) + 1,
-    Number(current.lapses || 0) + (result === 'again' ? 1 : 0),
-    result,
-    toDateKey_(today),
-    toDateKey_(nextReview),
-    new Date().toISOString(),
-  ]
+    const existingRow = finder ? finder.getRow() : 0
+    const currentBox = existingRow
+      ? Number(sheet.getRange(existingRow, 3).getValue()) || 0
+      : 0
+    const currentReps = existingRow
+      ? Number(sheet.getRange(existingRow, 4).getValue()) || 0
+      : 0
+    const currentHard = existingRow
+      ? Number(sheet.getRange(existingRow, 5).getValue()) || 0
+      : 0
 
-  if (rowIndex >= 0) {
-    sheet.getRange(rowIndex + 2, 1, 1, updated.length).setValues([updated])
-  } else {
-    sheet.appendRow(updated)
+    const next = schedule_(currentBox, result)
+    const today = new Date()
+    const rowValues = [
+      id,
+      String(payload.text || ''),
+      next.box,
+      currentReps + 1,
+      currentHard + (result === 'short' ? 1 : 0),
+      result,
+      dateKey_(today),
+      dateKey_(addDays_(today, next.days)),
+      new Date().toISOString(),
+    ]
+
+    if (existingRow) {
+      sheet.getRange(existingRow, 1, 1, rowValues.length).setValues([rowValues])
+    } else {
+      sheet.appendRow(rowValues)
+    }
+
+    return { id: id, box: next.box, nextReview: dateKey_(addDays_(today, next.days)), intervalDays: next.days }
+  } finally {
+    lock.releaseLock()
   }
-
-  return { ok: true, expressionId: String(payload.expressionId), box: nextBox, nextReview: toDateKey_(nextReview) }
 }
 
-function upsertExpression_(expression) {
-  if (!expression.expression) throw new Error('Campo expression é obrigatório.')
-  const sheet = SpreadsheetApp.getActive().getSheetByName(EXPRESSIONS_SHEET)
-  const table = readTable_(EXPRESSIONS_SHEET)
-  const id = expression.id || Utilities.getUuid()
-  const row = [
-    id,
-    expression.expression,
-    normalizeLanguage_(expression.language),
-    expression.translation || '',
-    expression.context || '',
-    expression.tags || '',
-    expression.createdAt || toDateKey_(new Date()),
-  ]
-  const rowIndex = table.findIndex((item) => String(item.id) === String(id))
-  if (rowIndex >= 0) sheet.getRange(rowIndex + 2, 1, 1, row.length).setValues([row])
-  else sheet.appendRow(row)
-  return { ok: true, id }
+function schedule_(box, result) {
+  const maxBox = INTERVALS.length - 1
+  if (result === 'short') {
+    return { box: Math.max(0, box - 1), days: SHORT_INTERVAL_DAYS }
+  }
+  if (result === 'long') {
+    const nextBox = Math.min(maxBox, box + 2)
+    return { box: nextBox, days: INTERVALS[nextBox] }
+  }
+  const nextBox = Math.min(maxBox, box + 1)
+  return { box: nextBox, days: INTERVALS[Math.min(maxBox, box)] }
 }
 
-function ensureSchema_() {
+// ---------------------------------------------------------------- infra
+
+function sourceSheet_() {
   const spreadsheet = SpreadsheetApp.getActive()
-  ensureSheet_(spreadsheet, EXPRESSIONS_SHEET, ['id', 'expression', 'language', 'translation', 'context', 'tags', 'createdAt'])
-  ensureSheet_(spreadsheet, PROGRESS_SHEET, ['expressionId', 'box', 'repetitions', 'lapses', 'lastResult', 'lastReviewedAt', 'nextReview', 'updatedAt'])
-}
-
-function ensureSheet_(spreadsheet, name, headers) {
-  const sheet = spreadsheet.getSheetByName(name) || spreadsheet.insertSheet(name)
-  if (sheet.getLastRow() === 0) sheet.appendRow(headers)
-  const currentHeaders = sheet.getRange(1, 1, 1, headers.length).getValues()[0]
-  if (currentHeaders.join('|') !== headers.join('|')) sheet.getRange(1, 1, 1, headers.length).setValues([headers])
-}
-
-function readTable_(sheetName) {
-  const sheet = SpreadsheetApp.getActive().getSheetByName(sheetName)
-  if (!sheet || sheet.getLastRow() < 2) return []
-  const values = sheet.getDataRange().getValues()
-  const headers = values.shift().map((header) => String(header).trim())
-  return values.map((row) => headers.reduce((item, header, index) => {
-    item[header] = row[index]
-    return item
-  }, {}))
-}
-
-function getSchema_() {
-  return {
-    expressionsSheet: EXPRESSIONS_SHEET,
-    progressSheet: PROGRESS_SHEET,
-    expressionsColumns: ['id', 'expression', 'language', 'translation', 'context', 'tags', 'createdAt'],
-    progressColumns: ['expressionId', 'box', 'repetitions', 'lapses', 'lastResult', 'lastReviewedAt', 'nextReview', 'updatedAt'],
+  const named = PropertiesService.getScriptProperties().getProperty('SOURCE_SHEET')
+  if (named) {
+    const sheet = spreadsheet.getSheetByName(named)
+    if (sheet) return sheet
   }
+  const sheets = spreadsheet.getSheets()
+  for (let i = 0; i < sheets.length; i++) {
+    if (sheets[i].getName() !== PROGRESS_SHEET) return sheets[i]
+  }
+  throw new Error('Nenhuma aba de palavras encontrada.')
 }
 
-function normalizeLanguage_(language) {
-  const value = String(language || '').toLowerCase()
-  if (value.startsWith('fr')) return 'fr-FR'
-  return 'en-US'
+function progressSheet_() {
+  const spreadsheet = SpreadsheetApp.getActive()
+  let sheet = spreadsheet.getSheetByName(PROGRESS_SHEET)
+  if (!sheet) {
+    sheet = spreadsheet.insertSheet(PROGRESS_SHEET)
+    sheet.appendRow(PROGRESS_HEADERS)
+    sheet.setFrozenRows(1)
+  } else if (sheet.getLastRow() === 0) {
+    sheet.appendRow(PROGRESS_HEADERS)
+    sheet.setFrozenRows(1)
+  }
+  return sheet
+}
+
+function readProgress_() {
+  const sheet = progressSheet_()
+  if (sheet.getLastRow() < 2) return {}
+  const values = sheet.getDataRange().getValues()
+  const headers = values[0].map(function (header) { return String(header).trim() })
+  const byId = {}
+  for (let i = 1; i < values.length; i++) {
+    const item = {}
+    for (let j = 0; j < headers.length; j++) item[headers[j]] = values[i][j]
+    if (item.id) byId[String(item.id)] = item
+  }
+  return byId
+}
+
+/** Casa os cabeçalhos reais da planilha (com acentos/variações) com campos internos. */
+function mapHeaders_(headerRow) {
+  const index = { text: -1, type: -1, ipa: -1, translation: -1, context: -1, chapter: -1, source: -1, id: -1, language: -1 }
+  for (let i = 0; i < headerRow.length; i++) {
+    const raw = String(headerRow[i] || '')
+    const key = raw.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim()
+    if (key === 'texto' || key === 'text' || key === 'expressao' || key === 'palavra') index.text = i
+    else if (key === 'tipo' || key === 'type') index.type = i
+    else if (key === 'ipa' || key === 'pronuncia') index.ipa = i
+    else if (key.indexOf('traduc') === 0 || key === 'translation' || key === 'significado') index.translation = i
+    else if (key === 'contexto' || key === 'context' || key === 'frase') index.context = i
+    else if (key === 'capitulo' || key === 'chapter') index.chapter = i
+    else if (key === 'fonte' || key === 'source' || key === 'origem') index.source = i
+    else if (key === 'id') index.id = i
+    else if (key === 'idioma' || key === 'lingua' || key === 'language') index.language = i
+  }
+  if (index.text < 0) throw new Error('A aba de palavras precisa de uma coluna "Texto".')
+  return index
+}
+
+function cell_(row, columnIndex) {
+  if (columnIndex < 0) return ''
+  const value = row[columnIndex]
+  if (value === null || value === undefined) return ''
+  if (Object.prototype.toString.call(value) === '[object Date]') return dateKey_(value)
+  return String(value).trim()
 }
 
 function addDays_(date, days) {
@@ -196,13 +234,13 @@ function addDays_(date, days) {
   return next
 }
 
-function formatMaybeDate_(value) {
+function maybeDateKey_(value) {
   if (!value) return ''
-  if (Object.prototype.toString.call(value) === '[object Date]') return toDateKey_(value)
+  if (Object.prototype.toString.call(value) === '[object Date]') return dateKey_(value)
   return String(value)
 }
 
-function toDateKey_(date) {
+function dateKey_(date) {
   return Utilities.formatDate(new Date(date), Session.getScriptTimeZone(), 'yyyy-MM-dd')
 }
 
