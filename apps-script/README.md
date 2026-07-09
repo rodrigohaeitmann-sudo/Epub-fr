@@ -6,18 +6,33 @@ palavras **nunca é modificada** pelo script.
 
 ## Colunas reconhecidas na aba de palavras
 
-A ordem não importa; o script casa pelos nomes (com ou sem acento):
+A ordem não importa; o script casa pelos nomes (com ou sem acento). Modelo atual:
 
 | Coluna | Uso no app |
 | --- | --- |
-| `Texto` | frente do card (obrigatória) |
-| `Tipo` | badge `word` / `expression` |
-| `IPA` | pronúncia exibida sob o texto |
-| `Traduções` | verso do card |
-| `Contexto` | frase/parágrafo de origem (com a expressão destacada) |
-| `Capítulo`, `Fonte` | referência exibida no verso |
-| `ID` | chave do progresso (se vazio, usa o próprio texto) |
-| `Idioma` *(opcional)* | `en` ou `fr` — sem ela o app detecta automaticamente |
+| `Expressão` | frente do card — o que você estuda (obrigatória) |
+| `Texto original` | frase de onde a expressão foi capturada (mostrada como "capturado de…") |
+| `Língua` | `Inglês` / `Francês` — define a voz do áudio e o filtro |
+| `Tipo` | badge `palavra` / `expressão` |
+| `IPA` | pronúncia exibida sob a expressão |
+| `Comentário IPA` | dica de pronúncia (destacada no verso) |
+| `Tradução` | tradução principal (verso) |
+| `Exemplo 1..3` + `Tradução 1..3` | exemplos de uso, cada um com áudio próprio e tradução |
+| `ID` | chave do progresso (ver abaixo) |
+
+O modelo antigo (`Texto`, `Traduções`, `Contexto`, `Fonte`, `Capítulo`) continua
+sendo lido, para não quebrar planilhas anteriores.
+
+## Sobre a coluna ID
+
+O `ID` é a chave que liga cada palavra ao seu progresso na aba `Progresso`.
+Se estiver vazio, o app deriva uma chave estável de `Língua + Expressão`, então
+tudo funciona **sem preencher nada**. Mas recomendo preencher o ID (números
+simples servem) antes de começar a salvar palavras repetidas, para garantir que
+o progresso nunca se confunda. Para preencher de uma vez:
+
+> Menu **Revisão → Preencher IDs faltantes** (criado por este script; numera só as
+> linhas vazias, sem tocar nas que já têm ID). Recarregue a página após rodar.
 
 ## Instalação (uma vez só)
 
@@ -39,8 +54,10 @@ URL `/exec` continua a mesma).
 
 ## API
 
-- `GET ?action=cards` → `{ ok, today, cards: [...] }` — todos os cards com progresso mesclado.
-- `GET ?action=ping` → `{ ok: true }`.
+- `GET ?action=cards` → `{ ok, today, cards: [...] }` — cada card traz
+  `id, text, original, language, type, ipa, ipaComment, translation,
+  examples: [{ text, translation }], box, repetitions, nextReview, ...`.
+- `GET ?action=ping` → `{ ok: true, version }`.
 - `POST` (Content-Type `text/plain`, corpo JSON):
   - `{ "action": "review", "id": "...", "text": "...", "result": "short" | "standard" | "long" }`
   - `{ "action": "reviewBatch", "reviews": [ ... ] }` — usado pela fila offline do app.
