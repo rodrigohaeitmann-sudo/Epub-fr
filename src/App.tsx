@@ -2,16 +2,17 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 type ReviewResult = 'short' | 'standard' | 'long'
 type Language = 'en-US' | 'fr-FR'
+type Example = { text: string; translation: string }
 
 type Card = {
   id: string
   text: string
+  original: string
   type: string
   ipa: string
+  ipaComment: string
   translation: string
-  context: string
-  chapter: string
-  source: string
+  examples: Example[]
   language: string
   box: number
   repetitions: number
@@ -59,7 +60,7 @@ function addDaysKey(days: number) {
 }
 
 const FRENCH_WORDS =
-  /(^|\s)(le|la|les|un|une|des|du|est|et|je|tu|il|elle|on|nous|vous|ne|pas|que|qui|quoi|avec|pour|dans|sur|ça|c'est|d'un|d'une|être|avoir|très|tout|toute)(\s|$|,|\.|!|\?)/i
+  /(^|\s)(le|la|les|un|une|des|du|est|et|je|tu|il|elle|on|nous|vous|ne|pas|que|qui|quoi|avec|pour|dans|sur|ça|c'est|d'un|d'une|être|avoir|très|tout|toute|aux)(\s|$|,|\.|!|\?)/i
 
 function detectLanguage(card: Card): Language {
   const explicit = card.language.trim().toLowerCase()
@@ -92,34 +93,25 @@ function speak(text: string, language: Language) {
   window.speechSynthesis.speak(utterance)
 }
 
-/** Extrai a frase do contexto que contém a expressão, para ouvir só ela. */
-function contextSentence(card: Card) {
-  if (!card.context) return ''
-  const sentences = card.context.split(/(?<=[.!?…”"])\s+/)
-  const needle = card.text.toLowerCase()
-  const match = sentences.find((sentence) => sentence.toLowerCase().includes(needle))
-  return match || sentences[0] || ''
-}
-
 function escapeRegExp(value: string) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
-function HighlightedContext({ context, term }: { context: string; term: string }) {
+function Highlighted({ text, term }: { text: string; term: string }) {
   const parts = useMemo(() => {
-    if (!term) return [context]
+    if (!term) return [text]
     try {
-      return context.split(new RegExp(`(${escapeRegExp(term)})`, 'gi'))
+      return text.split(new RegExp(`(${escapeRegExp(term)})`, 'gi'))
     } catch {
-      return [context]
+      return [text]
     }
-  }, [context, term])
+  }, [text, term])
   return (
-    <blockquote className="context">
+    <>
       {parts.map((part, index) =>
         part.toLowerCase() === term.toLowerCase() ? <mark key={index}>{part}</mark> : <span key={index}>{part}</span>,
       )}
-    </blockquote>
+    </>
   )
 }
 
@@ -135,16 +127,13 @@ function savePending(pending: PendingReview[]) {
   localStorage.setItem(PENDING_KEY, JSON.stringify(pending))
 }
 
-const DEMO_CARDS: Card[] = [
-  {
-    id: 'demo-1',
-    text: 'to keep track of',
-    type: 'expression',
+function makeDemoCard(partial: Partial<Card> & Pick<Card, 'id' | 'text' | 'translation'>): Card {
+  return {
+    original: partial.text,
+    type: 'palavra',
     ipa: '',
-    translation: 'acompanhar / manter registro de',
-    context: 'I use this app to keep track of new expressions.',
-    chapter: '',
-    source: 'Demo',
+    ipaComment: '',
+    examples: [],
     language: 'en',
     box: 0,
     repetitions: 0,
@@ -152,24 +141,37 @@ const DEMO_CARDS: Card[] = [
     lastResult: '',
     lastReviewedAt: '',
     nextReview: '',
-  },
-  {
+    ...partial,
+  }
+}
+
+const DEMO_CARDS: Card[] = [
+  makeDemoCard({
+    id: 'demo-1',
+    text: 'snag',
+    original: 'I snagged this on the way here',
+    type: 'palavra',
+    ipa: '/snæɡ/',
+    ipaComment: "Vogal /æ/ aberta, entre 'é' e 'á'; o 'g' final é pronunciado.",
+    translation: 'pegar rapidamente, conseguir (informal); enroscar',
+    examples: [
+      { text: 'I snagged the last ticket to the show.', translation: 'Consegui o último ingresso para o show.' },
+      { text: 'My sweater snagged on the fence.', translation: 'Meu suéter enroscou na cerca.' },
+    ],
+  }),
+  makeDemoCard({
     id: 'demo-2',
-    text: 'ça vaut le coup',
-    type: 'expression',
-    ipa: 'sa vo lə ku',
-    translation: 'vale a pena',
-    context: 'Réviser tous les jours, ça vaut le coup.',
-    chapter: '',
-    source: 'Demo',
+    text: 'obsèques',
+    original: 'obsèques',
+    type: 'palavra',
+    ipa: '/ɔp.sɛk/',
+    ipaComment: "ob-SÉK': o 'b' soa 'p' antes do 's'; o 's' final é mudo. Sempre no plural.",
+    translation: 'funeral, exéquias',
     language: 'fr',
-    box: 0,
-    repetitions: 0,
-    hardCount: 0,
-    lastResult: '',
-    lastReviewedAt: '',
-    nextReview: '',
-  },
+    examples: [
+      { text: 'Les obsèques auront lieu vendredi.', translation: 'O funeral será na sexta-feira.' },
+    ],
+  }),
 ]
 
 export default function App() {
@@ -192,31 +194,28 @@ export default function App() {
   const cardsById = useMemo(() => new Map(cards.map((card) => [card.id, card])), [cards])
   const isDemo = !scriptUrl
 
-  const flushPending = useCallback(
-    async (url: string) => {
-      if (flushing.current || !url) return
-      const pending = loadPending()
-      if (!pending.length) return
-      flushing.current = true
-      try {
-        const response = await fetch(url, {
-          method: 'POST',
-          headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-          body: JSON.stringify({ action: 'reviewBatch', reviews: pending }),
-        })
-        const data = await response.json()
-        if (data.ok) {
-          savePending([])
-          setPendingCount(0)
-        }
-      } catch {
-        // continua na fila local; tentaremos de novo depois
-      } finally {
-        flushing.current = false
+  const flushPending = useCallback(async (url: string) => {
+    if (flushing.current || !url) return
+    const pending = loadPending()
+    if (!pending.length) return
+    flushing.current = true
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify({ action: 'reviewBatch', reviews: pending }),
+      })
+      const data = await response.json()
+      if (data.ok) {
+        savePending([])
+        setPendingCount(0)
       }
-    },
-    [],
-  )
+    } catch {
+      // continua na fila local; tentaremos de novo depois
+    } finally {
+      flushing.current = false
+    }
+  }, [])
 
   const loadCards = useCallback(
     async (url: string) => {
@@ -270,6 +269,7 @@ export default function App() {
 
   const activeCard = queue.length ? cardsById.get(queue[0]) : undefined
   const activeLanguage: Language = activeCard ? detectLanguage(activeCard) : 'en-US'
+
   // Novas ainda não estudadas (respondidas ganham nextReview e saem do filtro).
   const remainingNew = useMemo(() => {
     const eligible = cards.filter((card) => languageFilter === 'all' || detectLanguage(card) === languageFilter)
@@ -332,12 +332,16 @@ export default function App() {
         }
         return
       }
+      if (event.key.toLowerCase() === 'p' && activeCard) {
+        speak(activeCard.text, activeLanguage)
+        return
+      }
       const result = (Object.keys(RESULT_META) as ReviewResult[]).find((key) => RESULT_META[key].key === event.key)
       if (result) answer(result)
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [isRevealed, activeCard, answer])
+  }, [isRevealed, activeCard, activeLanguage, answer])
 
   function saveSettings() {
     const trimmed = draftUrl.trim()
@@ -348,7 +352,8 @@ export default function App() {
   }
 
   const dueTotal = queue.length
-  const sentence = activeCard ? contextSentence(activeCard) : ''
+  const showOriginal =
+    !!activeCard && !!activeCard.original && activeCard.original.toLowerCase() !== activeCard.text.toLowerCase()
 
   return (
     <main className="app-shell">
@@ -431,34 +436,62 @@ export default function App() {
                 <span className={`lang ${activeLanguage === 'fr-FR' ? 'fr' : 'en'}`}>
                   {activeLanguage === 'fr-FR' ? '🇫🇷 Francês' : '🇬🇧 Inglês'}
                 </span>
-                {activeCard.type && <span>{activeCard.type === 'word' ? 'palavra' : activeCard.type}</span>}
+                {activeCard.type && <span>{activeCard.type}</span>}
                 <span>caixa {activeCard.box}</span>
                 {activeCard.repetitions > 0 && <span>{activeCard.repetitions}× revisada</span>}
               </div>
 
               <h2 className="expression">{activeCard.text}</h2>
-              {activeCard.ipa && <p className="ipa">/{activeCard.ipa}/</p>}
+              {activeCard.ipa && <p className="ipa">{activeCard.ipa}</p>}
 
               <div className="listen-row">
                 <button className="listen" onClick={() => speak(activeCard.text, activeLanguage)}>
                   🔊 Ouvir
                 </button>
-                {sentence && (
-                  <button className="listen ghost" onClick={() => speak(sentence, activeLanguage)}>
-                    💬 Ouvir frase
+                {showOriginal && (
+                  <button className="listen ghost" onClick={() => speak(activeCard.original, activeLanguage)}>
+                    💬 Ouvir frase original
                   </button>
                 )}
               </div>
 
+              {showOriginal && (
+                <p className="original">
+                  capturado de: <em>“{activeCard.original}”</em>
+                </p>
+              )}
+
               {isRevealed ? (
                 <div className="answer">
-                  <p className="translation">{activeCard.translation || 'Sem tradução na planilha — tente pelo contexto.'}</p>
-                  {activeCard.context && <HighlightedContext context={activeCard.context} term={activeCard.text} />}
-                  {(activeCard.source || activeCard.chapter) && (
-                    <p className="source">
-                      {activeCard.source}
-                      {activeCard.chapter ? ` · cap. ${activeCard.chapter}` : ''}
+                  <p className="translation">{activeCard.translation || 'Sem tradução na planilha.'}</p>
+
+                  {activeCard.ipaComment && (
+                    <p className="ipa-tip">
+                      <span aria-hidden="true">🗣️</span> {activeCard.ipaComment}
                     </p>
+                  )}
+
+                  {activeCard.examples.length > 0 && (
+                    <div className="examples">
+                      <h3>Exemplos</h3>
+                      {activeCard.examples.map((example, index) => (
+                        <div className="example" key={index}>
+                          <div className="example-line">
+                            <p className="example-text">
+                              <Highlighted text={example.text} term={activeCard.text} />
+                            </p>
+                            <button
+                              className="mini-listen"
+                              aria-label="Ouvir exemplo"
+                              onClick={() => speak(example.text, activeLanguage)}
+                            >
+                              🔊
+                            </button>
+                          </div>
+                          {example.translation && <p className="example-translation">{example.translation}</p>}
+                        </div>
+                      ))}
+                    </div>
                   )}
                 </div>
               ) : (
@@ -500,7 +533,7 @@ export default function App() {
 
       <footer className="foot">
         <span>{cards.length} itens na planilha</span>
-        <span>atalhos: espaço revela · 1 / 2 / 3 respondem</span>
+        <span>atalhos: espaço revela · P ouve · 1 / 2 / 3 respondem</span>
       </footer>
     </main>
   )
