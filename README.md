@@ -41,6 +41,10 @@ volta (evento `online` + retentativa periódica).
   toque numa delas para revê-la. As sessões anteriores ficam num histórico.
 - **Busca** (🔍): encontra por expressão, tradução ou exemplo, mesmo offline;
   abre a ficha completa da palavra, com opção "Praticar agora".
+- **Toque em qualquer palavra dos exemplos** (ou selecione um trecho) para
+  ouvi-la isolada e consultá-la na sua lista: se já for um card, o painel
+  mostra a tradução com atalho "ver card"; senão, mostra onde ela aparece e
+  oferece a busca completa.
 - Atalhos de teclado: `espaço` revela, `P` ouve, `1`/`2`/`3` respondem,
   `Esc` fecha busca/ficha.
 

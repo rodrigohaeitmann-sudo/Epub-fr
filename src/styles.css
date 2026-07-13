@@ -230,6 +230,12 @@ button { cursor: pointer; }
   text-transform: uppercase;
   color: #94a3b8;
 }
+.examples-hint { font-weight: 700; text-transform: none; letter-spacing: 0; color: #b6c2d4; }
+
+.pickable { cursor: pointer; border-radius: 4px; }
+.pickable:hover, .pickable:active { background: #e0e7ff; }
+mark.pickable:hover, mark.pickable:active { background: #fcd34d; }
+.selectable { -webkit-user-select: text; user-select: text; }
 .example {
   padding: 11px 13px;
   border-left: 4px solid #93c5fd;
@@ -366,6 +372,83 @@ button { cursor: pointer; }
   padding: 13px 20px;
   background: #2563eb;
   color: white;
+  font-weight: 800;
+}
+
+.sheet-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  background: rgba(15, 23, 42, 0.35);
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+}
+.word-sheet {
+  width: min(560px, 100%);
+  max-height: 70vh;
+  overflow-y: auto;
+  padding: 18px 18px calc(18px + env(safe-area-inset-bottom));
+  border-radius: 22px 22px 0 0;
+  background: white;
+  box-shadow: 0 -18px 50px rgba(31, 41, 55, 0.25);
+  animation: sheet-up 0.18s ease-out;
+}
+@keyframes sheet-up {
+  from { transform: translateY(24px); opacity: 0.6; }
+  to { transform: translateY(0); opacity: 1; }
+}
+.word-sheet-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.word-term { font-size: 1.3rem; letter-spacing: -0.02em; overflow-wrap: anywhere; }
+.word-sheet-actions { display: flex; gap: 8px; align-items: center; flex-shrink: 0; }
+.word-close {
+  border: 0;
+  border-radius: 999px;
+  width: 38px;
+  height: 38px;
+  background: #e2e8f0;
+  color: #475569;
+  font-weight: 800;
+}
+.word-none { margin: 0 0 12px; color: #94a3b8; font-size: 0.92rem; }
+.word-matches { margin: 0 0 12px; padding: 0; list-style: none; display: grid; gap: 6px; }
+.word-matches button {
+  width: 100%;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: 10px;
+  padding: 11px 12px;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  background: #f8fafc;
+  color: #172033;
+  text-align: left;
+}
+.match-text { font-weight: 800; }
+.match-translation { color: #64748b; font-size: 0.88rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.match-open { color: #2563eb; font-size: 0.8rem; font-weight: 800; white-space: nowrap; }
+.word-mentions h4 {
+  margin: 0 0 8px;
+  font-size: 0.72rem;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #94a3b8;
+}
+.word-search {
+  width: 100%;
+  border: 0;
+  border-radius: 12px;
+  padding: 12px;
+  background: #eef2f7;
+  color: #2563eb;
   font-weight: 800;
 }
 

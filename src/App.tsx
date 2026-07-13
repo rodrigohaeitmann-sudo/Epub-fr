@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
 
 type ReviewResult = 'short' | 'standard' | 'long'
 type Language = 'en-US' | 'fr-FR'
@@ -106,7 +106,23 @@ function escapeRegExp(value: string) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
-function Highlighted({ text, term }: { text: string; term: string }) {
+const WORD_TOKEN = /([\p{L}\p{M}'’-]+)/u
+
+/**
+ * Texto com o termo do card destacado e cada palavra tocável: um toque abre
+ * o painel de consulta (ouvir isolado + busca no banco local de cards).
+ */
+function SelectableText({
+  text,
+  term,
+  language,
+  onPick,
+}: {
+  text: string
+  term: string
+  language: Language
+  onPick: (term: string, language: Language) => void
+}) {
   const parts = useMemo(() => {
     if (!term) return [text]
     try {
@@ -115,10 +131,35 @@ function Highlighted({ text, term }: { text: string; term: string }) {
       return [text]
     }
   }, [text, term])
+
+  function pickWord(event: ReactMouseEvent, word: string) {
+    // com um trecho selecionado, quem responde é o handler de seleção do container
+    if (window.getSelection()?.toString().trim()) return
+    event.stopPropagation()
+    onPick(word, language)
+  }
+
+  let key = 0
   return (
     <>
-      {parts.map((part, index) =>
-        part.toLowerCase() === term.toLowerCase() ? <mark key={index}>{part}</mark> : <span key={index}>{part}</span>,
+      {parts.map((part) =>
+        part.toLowerCase() === term.toLowerCase() ? (
+          <mark key={key++} className="pickable" onClick={(event) => pickWord(event, part)}>
+            {part}
+          </mark>
+        ) : (
+          part
+            .split(WORD_TOKEN)
+            .map((token) =>
+              /[\p{L}\p{M}]/u.test(token) ? (
+                <span key={key++} className="pickable" onClick={(event) => pickWord(event, token)}>
+                  {token}
+                </span>
+              ) : (
+                <span key={key++}>{token}</span>
+              ),
+            )
+        ),
       )}
     </>
   )
@@ -234,6 +275,7 @@ export default function App() {
   const [searchOpen, setSearchOpen] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const [browseId, setBrowseId] = useState<string | null>(null)
+  const [picked, setPicked] = useState<{ term: string; language: Language } | null>(null)
 
   const [sessionEntries, setSessionEntries] = useState<SessionEntry[]>([])
   const [sessions, setSessions] = useState<SessionRecord[]>(() => loadSessions())
@@ -389,6 +431,43 @@ export default function App() {
     return eligible.filter((card) => !card.nextReview).length
   }, [cards, languageFilter])
 
+  const pick = useCallback((term: string, language: Language) => {
+    const trimmed = term.trim()
+    if (trimmed) setPicked({ term: trimmed, language })
+  }, [])
+
+  // Seleção nativa (arrastar no desktop, toque longo no celular) dentro dos
+  // exemplos: consulta o trecho selecionado inteiro.
+  const handleTextSelection = useCallback(
+    (language: Language) => {
+      const text = window.getSelection()?.toString().trim() || ''
+      if (!text || text.length > 80 || text.split(/\s+/).length > 8) return
+      pick(text, language)
+    },
+    [pick],
+  )
+
+  // Pesquisa do termo tocado no banco local: cards cujo texto casa com o termo
+  // (exatos primeiro) e cards que apenas o citam nos exemplos/frase original.
+  const pickedMatches = useMemo(() => {
+    if (!picked) return { direct: [] as Card[], mentions: [] as Card[] }
+    const query = normalize(picked.term)
+    if (!query) return { direct: [] as Card[], mentions: [] as Card[] }
+    const loose = query.length >= 3
+    const direct: Card[] = []
+    const mentions: Card[] = []
+    for (const card of cards) {
+      const text = normalize(card.text)
+      if (text === query || (loose && (text.includes(query) || query.includes(text)))) {
+        direct.push(card)
+      } else if (loose && normalize([card.original, ...card.examples.map((e) => e.text)].join(' ')).includes(query)) {
+        mentions.push(card)
+      }
+    }
+    direct.sort((a, b) => Number(normalize(b.text) === query) - Number(normalize(a.text) === query))
+    return { direct: direct.slice(0, 3), mentions: mentions.slice(0, 3) }
+  }, [picked, cards])
+
   const searchResults = useMemo(() => {
     const query = normalize(searchQuery.trim())
     if (!query) return []
@@ -475,14 +554,15 @@ export default function App() {
         return
       }
       if (event.key === 'Escape') {
-        if (browseId) setBrowseId(null)
+        if (picked) setPicked(null)
+        else if (browseId) setBrowseId(null)
         else if (searchOpen) {
           setSearchOpen(false)
           setSearchQuery('')
         }
         return
       }
-      if (browseId || searchOpen) return
+      if (picked || browseId || searchOpen) return
       if (event.code === 'Space' || event.key === 'Enter') {
         if (!isRevealed && activeCard) {
           event.preventDefault()
@@ -499,7 +579,7 @@ export default function App() {
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [isRevealed, activeCard, activeLanguage, answer, browseId, searchOpen])
+  }, [isRevealed, activeCard, activeLanguage, answer, browseId, searchOpen, picked])
 
   useEffect(() => {
     if (searchOpen) searchInputRef.current?.focus()
@@ -560,8 +640,15 @@ export default function App() {
         </div>
 
         {original && (
-          <p className="original">
-            capturado de: <em>“{original}”</em>
+          <p
+            className="original selectable"
+            onMouseUp={() => handleTextSelection(language)}
+            onTouchEnd={() => handleTextSelection(language)}
+          >
+            capturado de:{' '}
+            <em>
+              “<SelectableText text={original} term={card.text} language={language} onPick={pick} />”
+            </em>
           </p>
         )}
 
@@ -574,12 +661,18 @@ export default function App() {
           )}
           {card.examples.length > 0 && (
             <div className="examples">
-              <h3>Exemplos</h3>
+              <h3>
+                Exemplos <span className="examples-hint">· toque numa palavra para ouvir ou consultar</span>
+              </h3>
               {card.examples.map((example, index) => (
                 <div className="example" key={index}>
                   <div className="example-line">
-                    <p className="example-text">
-                      <Highlighted text={example.text} term={card.text} />
+                    <p
+                      className="example-text selectable"
+                      onMouseUp={() => handleTextSelection(language)}
+                      onTouchEnd={() => handleTextSelection(language)}
+                    >
+                      <SelectableText text={example.text} term={card.text} language={language} onPick={pick} />
                     </p>
                     <button
                       className="mini-listen"
@@ -807,8 +900,22 @@ export default function App() {
               </div>
 
               {showOriginal && (
-                <p className="original">
-                  capturado de: <em>“{activeCard.original}”</em>
+                <p
+                  className="original selectable"
+                  onMouseUp={() => handleTextSelection(activeLanguage)}
+                  onTouchEnd={() => handleTextSelection(activeLanguage)}
+                >
+                  capturado de:{' '}
+                  <em>
+                    “
+                    <SelectableText
+                      text={activeCard.original}
+                      term={activeCard.text}
+                      language={activeLanguage}
+                      onPick={pick}
+                    />
+                    ”
+                  </em>
                 </p>
               )}
 
@@ -824,12 +931,23 @@ export default function App() {
 
                   {activeCard.examples.length > 0 && (
                     <div className="examples">
-                      <h3>Exemplos</h3>
+                      <h3>
+                        Exemplos <span className="examples-hint">· toque numa palavra para ouvir ou consultar</span>
+                      </h3>
                       {activeCard.examples.map((example, index) => (
                         <div className="example" key={index}>
                           <div className="example-line">
-                            <p className="example-text">
-                              <Highlighted text={example.text} term={activeCard.text} />
+                            <p
+                              className="example-text selectable"
+                              onMouseUp={() => handleTextSelection(activeLanguage)}
+                              onTouchEnd={() => handleTextSelection(activeLanguage)}
+                            >
+                              <SelectableText
+                                text={example.text}
+                                term={activeCard.text}
+                                language={activeLanguage}
+                                onPick={pick}
+                              />
                             </p>
                             <button
                               className="mini-listen"
@@ -903,6 +1021,79 @@ export default function App() {
             </div>
           )}
         </section>
+      )}
+
+      {picked && (
+        <div className="sheet-backdrop" onClick={() => setPicked(null)}>
+          <div className="word-sheet" role="dialog" aria-label={`Consulta: ${picked.term}`} onClick={(event) => event.stopPropagation()}>
+            <div className="word-sheet-head">
+              <strong className="word-term">{picked.term}</strong>
+              <div className="word-sheet-actions">
+                <button className="listen" onClick={() => speak(picked.term, picked.language)}>
+                  🔊 Ouvir
+                </button>
+                <button className="word-close" aria-label="Fechar" onClick={() => setPicked(null)}>
+                  ✕
+                </button>
+              </div>
+            </div>
+
+            {pickedMatches.direct.length > 0 ? (
+              <ul className="word-matches">
+                {pickedMatches.direct.map((match) => (
+                  <li key={match.id}>
+                    <button
+                      onClick={() => {
+                        setPicked(null)
+                        setBrowseId(match.id)
+                      }}
+                    >
+                      <span className="match-text">{match.text}</span>
+                      <span className="match-translation">{match.translation || 'sem tradução'}</span>
+                      <span className="match-open">ver card →</span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="word-none">Não está na sua lista de palavras.</p>
+            )}
+
+            {pickedMatches.mentions.length > 0 && (
+              <div className="word-mentions">
+                <h4>Aparece nos exemplos de</h4>
+                <ul className="word-matches">
+                  {pickedMatches.mentions.map((match) => (
+                    <li key={match.id}>
+                      <button
+                        onClick={() => {
+                          setPicked(null)
+                          setBrowseId(match.id)
+                        }}
+                      >
+                        <span className="match-text">{match.text}</span>
+                        <span className="match-translation">{match.translation || 'sem tradução'}</span>
+                        <span className="match-open">ver card →</span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            <button
+              className="word-search"
+              onClick={() => {
+                setSearchQuery(picked.term)
+                setSearchOpen(true)
+                setBrowseId(null)
+                setPicked(null)
+              }}
+            >
+              🔍 Buscar “{picked.term}” no app
+            </button>
+          </div>
+        </div>
       )}
 
       <footer className="foot">
