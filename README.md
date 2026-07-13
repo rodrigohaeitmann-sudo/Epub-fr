@@ -10,8 +10,12 @@ exemplos de uso) e decide quando ela deve voltar:
 - **Muito tempo** — fácil: sobe duas caixas.
 
 O progresso é gravado por um Google Apps Script na aba `Progresso` da própria
-planilha — a aba de palavras continua dinâmica e nunca é alterada. Se a rede
-falhar, as respostas ficam numa fila local e são sincronizadas depois.
+planilha — a aba de palavras continua dinâmica e nunca é alterada.
+
+**Funciona offline** (ex.: durante um voo): um service worker mantém o app
+instalável e abrível sem internet, os cards ficam copiados no aparelho e cada
+resposta entra numa fila local, sincronizada automaticamente quando a conexão
+volta (evento `online` + retentativa periódica).
 
 ## Como configurar
 
@@ -32,7 +36,13 @@ falhar, as respostas ficam numa fila local e são sincronizadas depois.
   cada exemplo, com voz em inglês ou francês definida pela coluna `Língua`.
 - Filtro por idioma, IPA quando disponível, e "capturado de…" mostrando a
   frase original quando difere da expressão.
-- Atalhos de teclado: `espaço` revela, `P` ouve, `1`/`2`/`3` respondem.
+- **Resumo de sessão**: ao terminar a fila, o app salva a sessão no aparelho e
+  mostra um card com o resultado de cada expressão (difícil/padrão/fácil);
+  toque numa delas para revê-la. As sessões anteriores ficam num histórico.
+- **Busca** (🔍): encontra por expressão, tradução ou exemplo, mesmo offline;
+  abre a ficha completa da palavra, com opção "Praticar agora".
+- Atalhos de teclado: `espaço` revela, `P` ouve, `1`/`2`/`3` respondem,
+  `Esc` fecha busca/ficha.
 
 ## Estrutura
 
