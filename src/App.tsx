@@ -24,13 +24,24 @@ type Card = {
 
 type PendingReview = { id: string; text: string; result: ReviewResult; at: string }
 type SessionEntry = { id: string; text: string; translation: string; language: string; result: ReviewResult }
-type SessionRecord = { at: string; entries: SessionEntry[] }
+type SessionRecord = { at: string; entries: SessionEntry[]; mode?: string }
+
+type StudyMode = 'suggested' | 'review' | 'new' | 'practice'
+
+const MODE_LABEL: Record<StudyMode, string> = {
+  suggested: 'Estudo sugerido',
+  review: 'Revisão',
+  new: 'Novas',
+  practice: 'Prática',
+}
+
+const BLOCK_SIZE = 10
+const SUGGESTED_REVIEW_SHARE = 5
 
 const SCRIPT_URL_KEY = 'reviewScriptUrl'
 const PENDING_KEY = 'reviewPendingQueue'
 const CARDS_CACHE_KEY = 'reviewCardsCache'
 const SESSIONS_KEY = 'reviewSessions'
-const NEW_PER_BATCH = 20
 const MAX_SESSIONS = 30
 
 // Mesma escada de intervalos do Apps Script (apps-script/Code.gs).
@@ -96,6 +107,27 @@ function speak(text: string, language: Language) {
     voicesCache.find((item) => item.lang.startsWith(language.slice(0, 2)))
   if (voice) utterance.voice = voice
   window.speechSynthesis.speak(utterance)
+}
+
+function shuffle<T>(items: T[]): T[] {
+  const result = [...items]
+  for (let i = result.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1))
+    ;[result[i], result[j]] = [result[j], result[i]]
+  }
+  return result
+}
+
+/**
+ * Ordem de revisão do app: primeiro as vencidas (mais difíceis antes, depois
+ * as mais atrasadas), em seguida as que estão mais perto da hora de revisar.
+ */
+function reviewOrder(cards: Card[], today: string): Card[] {
+  const due = cards.filter((card) => card.nextReview <= today)
+  const upcoming = cards.filter((card) => card.nextReview > today)
+  due.sort((a, b) => b.hardCount - a.hardCount || a.nextReview.localeCompare(b.nextReview) || a.box - b.box)
+  upcoming.sort((a, b) => a.nextReview.localeCompare(b.nextReview) || b.hardCount - a.hardCount)
+  return [...due, ...upcoming]
 }
 
 function normalize(value: string) {
@@ -264,11 +296,13 @@ export default function App() {
 
   const [cards, setCards] = useState<Card[]>([])
   const [queue, setQueue] = useState<string[]>([])
+  const [screen, setScreen] = useState<'home' | 'study'>('home')
+  const [mode, setMode] = useState<StudyMode | null>(null)
+  const [blockSize, setBlockSize] = useState(0)
   const [languageFilter, setLanguageFilter] = useState<'all' | Language>('all')
   const [isRevealed, setIsRevealed] = useState(false)
   const [doneCount, setDoneCount] = useState(0)
   const [pendingCount, setPendingCount] = useState(() => loadPending().length)
-  const [dataVersion, setDataVersion] = useState(0)
   const [isOnline, setIsOnline] = useState(() => navigator.onLine)
   const [fromCache, setFromCache] = useState(false)
 
@@ -317,7 +351,6 @@ export default function App() {
     async (url: string) => {
       if (!url) {
         setCards(DEMO_CARDS)
-        setDataVersion((version) => version + 1)
         setStatus('ready')
         return
       }
@@ -330,7 +363,6 @@ export default function App() {
         if (!data.ok) throw new Error(data.error || 'Resposta inválida do script.')
         setCards(applyPending(data.cards as Card[], loadPending()))
         setFromCache(false)
-        setDataVersion((version) => version + 1)
         setStatus('ready')
       } catch (error) {
         // Sem rede (ou script fora do ar): usa a última cópia local dos cards.
@@ -338,8 +370,7 @@ export default function App() {
         if (cached && cached.cards.length) {
           setCards(cached.cards)
           setFromCache(true)
-          setDataVersion((version) => version + 1)
-          setStatus('ready')
+            setStatus('ready')
         } else {
           setStatus('error')
           setErrorMessage(error instanceof Error ? error.message : String(error))
@@ -392,26 +423,14 @@ export default function App() {
     return () => window.clearInterval(timer)
   }, [pendingCount, isDemo, scriptUrl, flushPending])
 
-  // Monta a fila da sessão: vencidas primeiro (mais atrasadas antes), depois novas.
-  // Depende de dataVersion (não de cards) para não desmontar a fila a cada resposta —
-  // cards marcados como "pouco tempo" reaparecem no fim da sessão.
-  useEffect(() => {
-    const today = todayKey()
-    const eligible = cardsRef.current.filter(
-      (card) => languageFilter === 'all' || detectLanguage(card) === languageFilter,
-    )
-    const dueReviewed = eligible
-      .filter((card) => card.nextReview && card.nextReview <= today)
-      .sort((a, b) => a.nextReview.localeCompare(b.nextReview))
-    const fresh = eligible.filter((card) => !card.nextReview).slice(0, NEW_PER_BATCH)
-    setQueue([...dueReviewed, ...fresh].map((card) => card.id))
-    setIsRevealed(false)
-  }, [dataVersion, languageFilter])
-
-  // Fim de sessão: salva o resumo no histórico local e o exibe no card de conclusão.
+  // Fim de bloco: salva o resumo no histórico local e o exibe no card de conclusão.
   useEffect(() => {
     if (prevQueueLength.current > 0 && queue.length === 0 && sessionEntries.length > 0) {
-      const record: SessionRecord = { at: new Date().toISOString(), entries: sessionEntries }
+      const record: SessionRecord = {
+        at: new Date().toISOString(),
+        entries: sessionEntries,
+        mode: MODE_LABEL[mode ?? 'practice'],
+      }
       const updated = [record, ...loadSessions()].slice(0, MAX_SESSIONS)
       localStorage.setItem(SESSIONS_KEY, JSON.stringify(updated))
       setSessions(updated)
@@ -419,17 +438,72 @@ export default function App() {
       setSessionEntries([])
     }
     prevQueueLength.current = queue.length
-  }, [queue, sessionEntries])
+  }, [queue, sessionEntries, mode])
 
   const activeCard = queue.length ? cardsById.get(queue[0]) : undefined
   const activeLanguage: Language = activeCard ? detectLanguage(activeCard) : 'en-US'
   const browseCard = browseId ? cardsById.get(browseId) : undefined
 
-  // Novas ainda não estudadas (respondidas ganham nextReview e saem do filtro).
-  const remainingNew = useMemo(() => {
+  // Pools do menu inicial (respeitando o filtro de idioma).
+  const pools = useMemo(() => {
+    const today = todayKey()
     const eligible = cards.filter((card) => languageFilter === 'all' || detectLanguage(card) === languageFilter)
-    return eligible.filter((card) => !card.nextReview).length
+    const seen = eligible.filter((card) => !!card.nextReview)
+    return {
+      seen: seen.length,
+      due: seen.filter((card) => card.nextReview <= today).length,
+      fresh: eligible.filter((card) => !card.nextReview).length,
+    }
   }, [cards, languageFilter])
+
+  /**
+   * Monta o bloco de estudo conforme o modo:
+   * - suggested: 5 revisões (na ordem de prioridade) + 5 novas aleatórias,
+   *   completando de um lado quando falta do outro, até 10;
+   * - review: 10 já vistas, difíceis e mais próximas da revisão primeiro;
+   * - new: 10 ainda não respondidas, em ordem aleatória.
+   */
+  function startStudy(nextMode: StudyMode, singleId?: string) {
+    const today = todayKey()
+    const eligible = cardsRef.current.filter(
+      (card) => languageFilter === 'all' || detectLanguage(card) === languageFilter,
+    )
+    const ordered = reviewOrder(eligible.filter((card) => !!card.nextReview), today)
+    const fresh = shuffle(eligible.filter((card) => !card.nextReview))
+
+    let block: Card[] = []
+    if (nextMode === 'practice' && singleId) {
+      const card = cardsById.get(singleId)
+      block = card ? [card] : []
+    } else if (nextMode === 'review') {
+      block = ordered.slice(0, BLOCK_SIZE)
+    } else if (nextMode === 'new') {
+      block = fresh.slice(0, BLOCK_SIZE)
+    } else {
+      const reviews = ordered.slice(0, SUGGESTED_REVIEW_SHARE)
+      const news = fresh.slice(0, BLOCK_SIZE - reviews.length)
+      block = [...reviews, ...news]
+      if (block.length < BLOCK_SIZE && reviews.length < ordered.length) {
+        block = [...ordered.slice(0, BLOCK_SIZE - news.length), ...news]
+      }
+      block = block.slice(0, BLOCK_SIZE)
+    }
+    if (!block.length) return
+
+    setMode(nextMode)
+    setQueue(block.map((card) => card.id))
+    setBlockSize(block.length)
+    setSessionEntries([])
+    setLastSession(null)
+    setDoneCount(0)
+    setIsRevealed(false)
+    setBrowseId(null)
+    setSearchOpen(false)
+    setSearchQuery('')
+    setPicked(null)
+    setScreen('study')
+    if ('speechSynthesis' in window) window.speechSynthesis.cancel()
+  }
 
   const pick = useCallback((term: string, language: Language) => {
     const trimmed = term.trim()
@@ -562,7 +636,7 @@ export default function App() {
         }
         return
       }
-      if (picked || browseId || searchOpen) return
+      if (picked || browseId || searchOpen || screen !== 'study') return
       if (event.code === 'Space' || event.key === 'Enter') {
         if (!isRevealed && activeCard) {
           event.preventDefault()
@@ -579,7 +653,7 @@ export default function App() {
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [isRevealed, activeCard, activeLanguage, answer, browseId, searchOpen, picked])
+  }, [isRevealed, activeCard, activeLanguage, answer, browseId, searchOpen, picked, screen])
 
   useEffect(() => {
     if (searchOpen) searchInputRef.current?.focus()
@@ -594,11 +668,16 @@ export default function App() {
   }
 
   function practiceNow(id: string) {
-    setQueue((current) => [id, ...current.filter((item) => item !== id)])
-    setBrowseId(null)
-    setSearchOpen(false)
-    setSearchQuery('')
-    setIsRevealed(false)
+    if (screen === 'study' && queue.length > 0) {
+      // no meio de um bloco: o card entra na frente da fila atual
+      setQueue((current) => [id, ...current.filter((item) => item !== id)])
+      setBrowseId(null)
+      setSearchOpen(false)
+      setSearchQuery('')
+      setIsRevealed(false)
+      return
+    }
+    startStudy('practice', id)
   }
 
   function renderCardDetail(card: Card) {
@@ -703,7 +782,7 @@ export default function App() {
     return (
       <div className="summary">
         <div className="summary-head">
-          <h3>{title}</h3>
+          <h3>{record.mode ? `${title} · ${record.mode}` : title}</h3>
           <span>{formatSessionDate(record.at)}</span>
         </div>
         <div className="summary-counts">
@@ -733,10 +812,9 @@ export default function App() {
     )
   }
 
-  const dueTotal = queue.length
   const showOriginal =
     !!activeCard && !!activeCard.original && activeCard.original.toLowerCase() !== activeCard.text.toLowerCase()
-  const previousSessions = lastSession ? sessions.slice(1) : sessions
+  const studying = screen === 'study'
 
   return (
     <main className="app-shell">
@@ -746,8 +824,9 @@ export default function App() {
           <p>revisão espaçada da sua planilha</p>
         </div>
         <div className="chips">
-          <span className="chip due">{dueTotal} na fila</span>
-          <span className="chip done">{doneCount} feitas</span>
+          {studying && <span className="chip due">{queue.length} na fila</span>}
+          {studying && <span className="chip done">{doneCount} feitas</span>}
+          {!studying && <span className="chip due">{pools.due} p/ revisar hoje</span>}
           {!isOnline && <span className="chip offline">✈️ offline</span>}
           {isOnline && fromCache && <span className="chip offline">dados locais</span>}
           {pendingCount > 0 && <span className="chip pending">{pendingCount} p/ sincronizar</span>}
@@ -810,26 +889,49 @@ export default function App() {
         </section>
       )}
 
-      <div className="filters" role="tablist" aria-label="Filtro de idioma">
-        {(
-          [
-            ['all', 'Todas'],
-            ['en-US', 'Inglês'],
-            ['fr-FR', 'Francês'],
-          ] as const
-        ).map(([value, label]) => (
-          <button
-            key={value}
-            className={languageFilter === value ? 'active' : ''}
-            onClick={() => setLanguageFilter(value)}
-          >
-            {label}
+      {!studying && !browseCard && !searchOpen && (
+        <div className="filters" role="tablist" aria-label="Filtro de idioma">
+          {(
+            [
+              ['all', 'Todas'],
+              ['en-US', 'Inglês'],
+              ['fr-FR', 'Francês'],
+            ] as const
+          ).map(([value, label]) => (
+            <button
+              key={value}
+              className={languageFilter === value ? 'active' : ''}
+              onClick={() => setLanguageFilter(value)}
+            >
+              {label}
+            </button>
+          ))}
+          <button className="refresh" onClick={() => loadCards(scriptUrl)} disabled={status === 'loading'}>
+            {status === 'loading' ? 'Carregando…' : '↻ Recarregar'}
           </button>
-        ))}
-        <button className="refresh" onClick={() => loadCards(scriptUrl)} disabled={status === 'loading'}>
-          {status === 'loading' ? 'Carregando…' : '↻ Recarregar'}
-        </button>
-      </div>
+        </div>
+      )}
+
+      {studying && !browseCard && !searchOpen && (
+        <div className="study-header">
+          <button
+            className="menu-back"
+            onClick={() => {
+              setScreen('home')
+              setQueue([])
+              setSessionEntries([])
+              setIsRevealed(false)
+              if ('speechSynthesis' in window) window.speechSynthesis.cancel()
+            }}
+          >
+            ← Menu
+          </button>
+          <span className="study-progress">
+            {MODE_LABEL[mode ?? 'practice']} ·{' '}
+            {queue.length ? `${Math.min(sessionEntries.length + 1, blockSize)}/${blockSize}` : 'concluído'}
+          </span>
+        </div>
+      )}
 
       {status === 'error' && (
         <section className="notice error">
@@ -873,6 +975,59 @@ export default function App() {
           ) : status === 'loading' && !cards.length ? (
             <div className="done-state">
               <h2>Carregando cards…</h2>
+            </div>
+          ) : !studying ? (
+            <div className="home">
+              <h2 className="home-title">O que estudar agora?</h2>
+              <div className="mode-grid">
+                <button
+                  className="mode-card suggested"
+                  disabled={pools.seen + pools.fresh === 0}
+                  onClick={() => startStudy('suggested')}
+                >
+                  <span className="mode-icon" aria-hidden="true">✨</span>
+                  <strong>Estudo sugerido</strong>
+                  <span className="mode-desc">5 revisões + 5 novas aleatórias</span>
+                  <small>o equilíbrio ideal para o dia a dia</small>
+                </button>
+                <button className="mode-card review" disabled={pools.seen === 0} onClick={() => startStudy('review')}>
+                  <span className="mode-icon" aria-hidden="true">🔁</span>
+                  <strong>Revisão</strong>
+                  <span className="mode-desc">10 cards já vistos, difíceis primeiro</span>
+                  <small>
+                    {pools.due > 0
+                      ? `${pools.due} vencido${pools.due === 1 ? '' : 's'} hoje · ${pools.seen} no total`
+                      : `nada vencido · ${pools.seen} já vistas`}
+                  </small>
+                </button>
+                <button className="mode-card fresh" disabled={pools.fresh === 0} onClick={() => startStudy('new')}>
+                  <span className="mode-icon" aria-hidden="true">🌱</span>
+                  <strong>Novas</strong>
+                  <span className="mode-desc">10 cards que você ainda não estudou</span>
+                  <small>{pools.fresh} disponíve{pools.fresh === 1 ? 'l' : 'is'}</small>
+                </button>
+              </div>
+
+              {sessions.length > 0 && (
+                <div className="history">
+                  <h3>Blocos de estudo já feitos</h3>
+                  <ul>
+                    {sessions.map((record, index) => (
+                      <li key={record.at}>
+                        <button
+                          className="history-item"
+                          onClick={() => setExpandedSession(expandedSession === index ? null : index)}
+                        >
+                          <span>{record.mode || 'Estudo'}</span>
+                          <span>{formatSessionDate(record.at)}</span>
+                          <span>{record.entries.length} cards</span>
+                        </button>
+                        {expandedSession === index && renderSummary(record, 'Bloco')}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
             </div>
           ) : activeCard ? (
             <>
@@ -984,40 +1139,25 @@ export default function App() {
             </>
           ) : (
             <div className="done-state">
-              <h2>Revisão concluída 🎉</h2>
+              <h2>Bloco concluído 🎉</h2>
               <p>
                 {lastSession
-                  ? 'Sessão salva. Toque numa expressão para revê-la.'
-                  : 'Nenhum card vencido para o filtro selecionado.'}
+                  ? 'Progresso salvo. Toque numa expressão para revê-la.'
+                  : 'Nada para estudar neste modo agora.'}
               </p>
 
-              {lastSession && renderSummary(lastSession, 'Resumo da sessão')}
+              {lastSession && renderSummary(lastSession, 'Resumo')}
 
-              {remainingNew > 0 && (
-                <button className="more-new" onClick={() => setDataVersion((version) => version + 1)}>
-                  Estudar +{Math.min(NEW_PER_BATCH, remainingNew)} palavras novas
+              <div className="done-actions">
+                <button className="more-new" onClick={() => setScreen('home')}>
+                  ← Voltar ao menu
                 </button>
-              )}
-
-              {previousSessions.length > 0 && (
-                <div className="history">
-                  <h3>Sessões anteriores</h3>
-                  <ul>
-                    {previousSessions.map((record, index) => (
-                      <li key={record.at}>
-                        <button
-                          className="history-item"
-                          onClick={() => setExpandedSession(expandedSession === index ? null : index)}
-                        >
-                          <span>{formatSessionDate(record.at)}</span>
-                          <span>{record.entries.length} cards</span>
-                        </button>
-                        {expandedSession === index && renderSummary(record, 'Sessão')}
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              )}
+                {mode && mode !== 'practice' && (
+                  <button className="again" onClick={() => startStudy(mode)}>
+                    Mais um bloco
+                  </button>
+                )}
+              </div>
             </div>
           )}
         </section>

@@ -27,8 +27,14 @@ volta (evento `online` + retentativa periódica).
 
 ## Recursos
 
-- Fila do dia: cards vencidos primeiro (mais atrasados antes) + até 20 novos
-  por sessão (botão para puxar mais 20 ao terminar).
+- **Menu inicial com três modos de estudo** (blocos de 10 cards):
+  - ✨ *Estudo sugerido* — 5 revisões (na ordem de prioridade) + 5 novas em
+    ordem aleatória; completa de um lado se faltar do outro;
+  - 🔁 *Revisão* — 10 cards já vistos, priorizando os difíceis e os mais
+    próximos da hora de revisar;
+  - 🌱 *Novas* — 10 cards ainda não respondidos, em ordem aleatória.
+- Tela de estudo com progresso do bloco (`Revisão · 4/10`) e botão ← Menu;
+  ao concluir, o bloco é salvo e o resumo aparece na hora, com "Mais um bloco".
 - Verso rico: tradução em destaque, **dica de pronúncia** (Comentário IPA) e
   até 3 **exemplos de uso**, cada um com a expressão destacada, tradução em
   português e botão de áudio próprio.
@@ -36,9 +42,9 @@ volta (evento `online` + retentativa periódica).
   cada exemplo, com voz em inglês ou francês definida pela coluna `Língua`.
 - Filtro por idioma, IPA quando disponível, e "capturado de…" mostrando a
   frase original quando difere da expressão.
-- **Resumo de sessão**: ao terminar a fila, o app salva a sessão no aparelho e
-  mostra um card com o resultado de cada expressão (difícil/padrão/fácil);
-  toque numa delas para revê-la. As sessões anteriores ficam num histórico.
+- **Blocos já feitos**: o menu inicial lista o histórico de blocos (modo, data
+  e nº de cards); cada bloco expande para mostrar o resultado por expressão
+  (difícil/padrão/fácil), e cada expressão reabre a ficha completa.
 - **Busca** (🔍): encontra por expressão, tradução ou exemplo, mesmo offline;
   abre a ficha completa da palavra, com opção "Praticar agora".
 - **Toque em qualquer palavra dos exemplos** (ou selecione um trecho) para
