@@ -284,8 +284,58 @@ mark.pickable:hover, mark.pickable:active { background: #fcd34d; }
 .review-actions .standard { background: #16a34a; }
 .review-actions .long { background: #2563eb; }
 
+.study-header { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+.menu-back {
+  border: 0;
+  border-radius: 999px;
+  padding: 9px 15px;
+  background: #e2e8f0;
+  color: #475569;
+  font-weight: 800;
+}
+.study-progress { color: #64748b; font-size: 0.85rem; font-weight: 800; }
+
+.home { width: 100%; }
+.home-title { margin: 4px 0 16px; font-size: 1.25rem; letter-spacing: -0.02em; }
+.mode-grid { display: grid; gap: 10px; }
+.mode-card {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  grid-template-areas: 'icon title' 'icon desc' 'icon meta';
+  column-gap: 14px;
+  row-gap: 2px;
+  align-items: center;
+  padding: 15px 16px;
+  border: 1px solid #e2e8f0;
+  border-radius: 18px;
+  background: white;
+  color: #172033;
+  text-align: left;
+  transition: transform 0.15s ease;
+}
+.mode-card:active { transform: scale(0.985); }
+.mode-card:disabled { opacity: 0.45; cursor: not-allowed; }
+.mode-icon { grid-area: icon; font-size: 1.7rem; }
+.mode-card strong { grid-area: title; font-size: 1.05rem; }
+.mode-desc { grid-area: desc; color: #475569; font-size: 0.88rem; }
+.mode-card small { grid-area: meta; color: #94a3b8; font-size: 0.78rem; font-weight: 700; }
+.mode-card.suggested { border-color: #c7d2fe; background: linear-gradient(135deg, #eef2ff, #ffffff); }
+.mode-card.review { border-color: #fecaca; background: linear-gradient(135deg, #fef2f2, #ffffff); }
+.mode-card.fresh { border-color: #bbf7d0; background: linear-gradient(135deg, #f0fdf4, #ffffff); }
+
+.home .history { margin-top: 24px; max-width: none; }
+
 .done-state { margin: auto; text-align: center; color: #526071; padding: 30px 10px; width: 100%; }
 .done-state h2 { margin: 0 0 10px; }
+.done-actions { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; margin-top: 16px; }
+.done-actions .again {
+  border: 0;
+  border-radius: 999px;
+  padding: 13px 20px;
+  background: #16a34a;
+  color: white;
+  font-weight: 800;
+}
 
 .summary {
   margin: 18px auto 0;
@@ -354,6 +404,8 @@ mark.pickable:hover, mark.pickable:active { background: #fcd34d; }
   color: #475569;
   font-weight: 700;
 }
+.history-item span:first-child { color: #172033; }
+.history-item span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .browse { display: flex; flex-direction: column; }
 .browse-top { display: flex; justify-content: space-between; gap: 8px; margin-bottom: 16px; }
