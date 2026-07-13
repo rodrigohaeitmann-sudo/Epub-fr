@@ -23,10 +23,15 @@ type Card = {
 }
 
 type PendingReview = { id: string; text: string; result: ReviewResult; at: string }
+type SessionEntry = { id: string; text: string; translation: string; language: string; result: ReviewResult }
+type SessionRecord = { at: string; entries: SessionEntry[] }
 
 const SCRIPT_URL_KEY = 'reviewScriptUrl'
 const PENDING_KEY = 'reviewPendingQueue'
+const CARDS_CACHE_KEY = 'reviewCardsCache'
+const SESSIONS_KEY = 'reviewSessions'
 const NEW_PER_BATCH = 20
+const MAX_SESSIONS = 30
 
 // Mesma escada de intervalos do Apps Script (apps-script/Code.gs).
 const INTERVALS = [1, 3, 7, 16, 35, 70, 140]
@@ -53,8 +58,8 @@ function scheduleDays(box: number, result: ReviewResult) {
   return { box: nextBox, days: INTERVALS[Math.min(maxBox, box)] }
 }
 
-function addDaysKey(days: number) {
-  const date = new Date()
+function addDaysKey(days: number, from?: string) {
+  const date = from ? new Date(from) : new Date()
   date.setDate(date.getDate() + days)
   return date.toISOString().slice(0, 10)
 }
@@ -62,7 +67,7 @@ function addDaysKey(days: number) {
 const FRENCH_WORDS =
   /(^|\s)(le|la|les|un|une|des|du|est|et|je|tu|il|elle|on|nous|vous|ne|pas|que|qui|quoi|avec|pour|dans|sur|ça|c'est|d'un|d'une|être|avoir|très|tout|toute|aux)(\s|$|,|\.|!|\?)/i
 
-function detectLanguage(card: Card): Language {
+function detectLanguage(card: Pick<Card, 'language' | 'text'>): Language {
   const explicit = card.language.trim().toLowerCase()
   if (explicit) return explicit.startsWith('fr') ? 'fr-FR' : 'en-US'
   const text = card.text.toLowerCase()
@@ -93,6 +98,10 @@ function speak(text: string, language: Language) {
   window.speechSynthesis.speak(utterance)
 }
 
+function normalize(value: string) {
+  return value.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+}
+
 function escapeRegExp(value: string) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
@@ -115,16 +124,47 @@ function Highlighted({ text, term }: { text: string; term: string }) {
   )
 }
 
-function loadPending(): PendingReview[] {
+function readJson<T>(key: string, fallback: T): T {
   try {
-    return JSON.parse(localStorage.getItem(PENDING_KEY) || '[]') as PendingReview[]
+    const raw = localStorage.getItem(key)
+    return raw ? (JSON.parse(raw) as T) : fallback
   } catch {
-    return []
+    return fallback
   }
+}
+
+function loadPending(): PendingReview[] {
+  return readJson<PendingReview[]>(PENDING_KEY, [])
 }
 
 function savePending(pending: PendingReview[]) {
   localStorage.setItem(PENDING_KEY, JSON.stringify(pending))
+}
+
+function loadSessions(): SessionRecord[] {
+  return readJson<SessionRecord[]>(SESSIONS_KEY, [])
+}
+
+/** Reaplica localmente respostas ainda não sincronizadas sobre os dados do servidor. */
+function applyPending(cards: Card[], pending: PendingReview[]): Card[] {
+  if (!pending.length) return cards
+  const byId = new Map(cards.map((card) => [card.id, { ...card }]))
+  for (const review of pending) {
+    const card = byId.get(review.id)
+    if (!card) continue
+    const next = scheduleDays(card.box, review.result)
+    card.box = next.box
+    card.repetitions += 1
+    card.hardCount += review.result === 'short' ? 1 : 0
+    card.lastResult = review.result
+    card.lastReviewedAt = review.at.slice(0, 10)
+    card.nextReview = addDaysKey(next.days, review.at)
+  }
+  return cards.map((card) => byId.get(card.id) as Card)
+}
+
+function formatSessionDate(iso: string) {
+  return new Date(iso).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
 }
 
 function makeDemoCard(partial: Partial<Card> & Pick<Card, 'id' | 'text' | 'translation'>): Card {
@@ -188,8 +228,22 @@ export default function App() {
   const [doneCount, setDoneCount] = useState(0)
   const [pendingCount, setPendingCount] = useState(() => loadPending().length)
   const [dataVersion, setDataVersion] = useState(0)
+  const [isOnline, setIsOnline] = useState(() => navigator.onLine)
+  const [fromCache, setFromCache] = useState(false)
+
+  const [searchOpen, setSearchOpen] = useState(false)
+  const [searchQuery, setSearchQuery] = useState('')
+  const [browseId, setBrowseId] = useState<string | null>(null)
+
+  const [sessionEntries, setSessionEntries] = useState<SessionEntry[]>([])
+  const [sessions, setSessions] = useState<SessionRecord[]>(() => loadSessions())
+  const [lastSession, setLastSession] = useState<SessionRecord | null>(null)
+  const [expandedSession, setExpandedSession] = useState<number | null>(null)
+
   const flushing = useRef(false)
   const cardsRef = useRef<Card[]>([])
+  const prevQueueLength = useRef(0)
+  const searchInputRef = useRef<HTMLInputElement>(null)
 
   const cardsById = useMemo(() => new Map(cards.map((card) => [card.id, card])), [cards])
   const isDemo = !scriptUrl
@@ -232,12 +286,22 @@ export default function App() {
         const response = await fetch(`${url}${url.includes('?') ? '&' : '?'}action=cards`)
         const data = await response.json()
         if (!data.ok) throw new Error(data.error || 'Resposta inválida do script.')
-        setCards(data.cards as Card[])
+        setCards(applyPending(data.cards as Card[], loadPending()))
+        setFromCache(false)
         setDataVersion((version) => version + 1)
         setStatus('ready')
       } catch (error) {
-        setStatus('error')
-        setErrorMessage(error instanceof Error ? error.message : String(error))
+        // Sem rede (ou script fora do ar): usa a última cópia local dos cards.
+        const cached = readJson<{ at: string; cards: Card[] } | null>(CARDS_CACHE_KEY, null)
+        if (cached && cached.cards.length) {
+          setCards(cached.cards)
+          setFromCache(true)
+          setDataVersion((version) => version + 1)
+          setStatus('ready')
+        } else {
+          setStatus('error')
+          setErrorMessage(error instanceof Error ? error.message : String(error))
+        }
       }
     },
     [flushPending],
@@ -250,6 +314,41 @@ export default function App() {
   useEffect(() => {
     cardsRef.current = cards
   }, [cards])
+
+  // Guarda a cópia local dos cards (com o progresso já aplicado) para uso offline.
+  useEffect(() => {
+    if (isDemo || !cards.length) return
+    try {
+      localStorage.setItem(CARDS_CACHE_KEY, JSON.stringify({ at: new Date().toISOString(), cards }))
+    } catch {
+      // sem espaço no storage: o app segue, só perde o modo offline
+    }
+  }, [cards, isDemo])
+
+  // Ao voltar a conexão, sincroniza as respostas pendentes (sem desmontar a sessão).
+  useEffect(() => {
+    const onOnline = () => {
+      setIsOnline(true)
+      flushPending(scriptUrl)
+    }
+    const onOffline = () => setIsOnline(false)
+    window.addEventListener('online', onOnline)
+    window.addEventListener('offline', onOffline)
+    return () => {
+      window.removeEventListener('online', onOnline)
+      window.removeEventListener('offline', onOffline)
+    }
+  }, [scriptUrl, flushPending])
+
+  // Retentativa periódica: cobre o caso em que o evento "online" chega
+  // enquanto uma tentativa de sync ainda está falhando.
+  useEffect(() => {
+    if (!pendingCount || isDemo) return
+    const timer = window.setInterval(() => {
+      if (navigator.onLine) flushPending(scriptUrl)
+    }, 15000)
+    return () => window.clearInterval(timer)
+  }, [pendingCount, isDemo, scriptUrl, flushPending])
 
   // Monta a fila da sessão: vencidas primeiro (mais atrasadas antes), depois novas.
   // Depende de dataVersion (não de cards) para não desmontar a fila a cada resposta —
@@ -267,14 +366,46 @@ export default function App() {
     setIsRevealed(false)
   }, [dataVersion, languageFilter])
 
+  // Fim de sessão: salva o resumo no histórico local e o exibe no card de conclusão.
+  useEffect(() => {
+    if (prevQueueLength.current > 0 && queue.length === 0 && sessionEntries.length > 0) {
+      const record: SessionRecord = { at: new Date().toISOString(), entries: sessionEntries }
+      const updated = [record, ...loadSessions()].slice(0, MAX_SESSIONS)
+      localStorage.setItem(SESSIONS_KEY, JSON.stringify(updated))
+      setSessions(updated)
+      setLastSession(record)
+      setSessionEntries([])
+    }
+    prevQueueLength.current = queue.length
+  }, [queue, sessionEntries])
+
   const activeCard = queue.length ? cardsById.get(queue[0]) : undefined
   const activeLanguage: Language = activeCard ? detectLanguage(activeCard) : 'en-US'
+  const browseCard = browseId ? cardsById.get(browseId) : undefined
 
   // Novas ainda não estudadas (respondidas ganham nextReview e saem do filtro).
   const remainingNew = useMemo(() => {
     const eligible = cards.filter((card) => languageFilter === 'all' || detectLanguage(card) === languageFilter)
     return eligible.filter((card) => !card.nextReview).length
   }, [cards, languageFilter])
+
+  const searchResults = useMemo(() => {
+    const query = normalize(searchQuery.trim())
+    if (!query) return []
+    return cards
+      .filter((card) => {
+        const haystack = normalize(
+          [
+            card.text,
+            card.original,
+            card.translation,
+            ...card.examples.map((example) => `${example.text} ${example.translation}`),
+          ].join(' '),
+        )
+        return haystack.includes(query)
+      })
+      .slice(0, 40)
+  }, [cards, searchQuery])
 
   const sendReview = useCallback(
     (card: Card, result: ReviewResult) => {
@@ -310,6 +441,18 @@ export default function App() {
             : card,
         ),
       )
+      setSessionEntries((current) => {
+        const entry: SessionEntry = {
+          id: activeCard.id,
+          text: activeCard.text,
+          translation: activeCard.translation,
+          language: activeCard.language,
+          result,
+        }
+        const existing = current.findIndex((item) => item.id === entry.id)
+        if (existing >= 0) return current.map((item, index) => (index === existing ? entry : item))
+        return [...current, entry]
+      })
       setQueue((current) => {
         const rest = current.slice(1)
         // "Pouco tempo": além de voltar amanhã, reaparece no fim desta sessão.
@@ -324,7 +467,22 @@ export default function App() {
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
-      if (event.target instanceof HTMLInputElement) return
+      if (event.target instanceof HTMLInputElement) {
+        if (event.key === 'Escape') {
+          setSearchOpen(false)
+          setSearchQuery('')
+        }
+        return
+      }
+      if (event.key === 'Escape') {
+        if (browseId) setBrowseId(null)
+        else if (searchOpen) {
+          setSearchOpen(false)
+          setSearchQuery('')
+        }
+        return
+      }
+      if (browseId || searchOpen) return
       if (event.code === 'Space' || event.key === 'Enter') {
         if (!isRevealed && activeCard) {
           event.preventDefault()
@@ -341,7 +499,11 @@ export default function App() {
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [isRevealed, activeCard, activeLanguage, answer])
+  }, [isRevealed, activeCard, activeLanguage, answer, browseId, searchOpen])
+
+  useEffect(() => {
+    if (searchOpen) searchInputRef.current?.focus()
+  }, [searchOpen])
 
   function saveSettings() {
     const trimmed = draftUrl.trim()
@@ -351,9 +513,137 @@ export default function App() {
     setDoneCount(0)
   }
 
+  function practiceNow(id: string) {
+    setQueue((current) => [id, ...current.filter((item) => item !== id)])
+    setBrowseId(null)
+    setSearchOpen(false)
+    setSearchQuery('')
+    setIsRevealed(false)
+  }
+
+  function renderCardDetail(card: Card) {
+    const language = detectLanguage(card)
+    const original = card.original && card.original.toLowerCase() !== card.text.toLowerCase() ? card.original : ''
+    return (
+      <div className="browse">
+        <div className="browse-top">
+          <button className="back" onClick={() => setBrowseId(null)}>
+            ← Voltar
+          </button>
+          <button className="practice" onClick={() => practiceNow(card.id)}>
+            🎯 Praticar agora
+          </button>
+        </div>
+
+        <div className="card-meta">
+          <span className={`lang ${language === 'fr-FR' ? 'fr' : 'en'}`}>
+            {language === 'fr-FR' ? '🇫🇷 Francês' : '🇬🇧 Inglês'}
+          </span>
+          {card.type && <span>{card.type}</span>}
+          <span>caixa {card.box}</span>
+          {card.repetitions > 0 && <span>{card.repetitions}× revisada</span>}
+          {card.nextReview && <span>volta {card.nextReview}</span>}
+        </div>
+
+        <h2 className="expression">{card.text}</h2>
+        {card.ipa && <p className="ipa">{card.ipa}</p>}
+
+        <div className="listen-row">
+          <button className="listen" onClick={() => speak(card.text, language)}>
+            🔊 Ouvir
+          </button>
+          {original && (
+            <button className="listen ghost" onClick={() => speak(original, language)}>
+              💬 Ouvir frase original
+            </button>
+          )}
+        </div>
+
+        {original && (
+          <p className="original">
+            capturado de: <em>“{original}”</em>
+          </p>
+        )}
+
+        <div className="answer">
+          <p className="translation">{card.translation || 'Sem tradução na planilha.'}</p>
+          {card.ipaComment && (
+            <p className="ipa-tip">
+              <span aria-hidden="true">🗣️</span> {card.ipaComment}
+            </p>
+          )}
+          {card.examples.length > 0 && (
+            <div className="examples">
+              <h3>Exemplos</h3>
+              {card.examples.map((example, index) => (
+                <div className="example" key={index}>
+                  <div className="example-line">
+                    <p className="example-text">
+                      <Highlighted text={example.text} term={card.text} />
+                    </p>
+                    <button
+                      className="mini-listen"
+                      aria-label="Ouvir exemplo"
+                      onClick={() => speak(example.text, language)}
+                    >
+                      🔊
+                    </button>
+                  </div>
+                  {example.translation && <p className="example-translation">{example.translation}</p>}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    )
+  }
+
+  function renderSummary(record: SessionRecord, title: string) {
+    const counts = record.entries.reduce(
+      (tally, entry) => {
+        tally[entry.result] += 1
+        return tally
+      },
+      { short: 0, standard: 0, long: 0 } as Record<ReviewResult, number>,
+    )
+    return (
+      <div className="summary">
+        <div className="summary-head">
+          <h3>{title}</h3>
+          <span>{formatSessionDate(record.at)}</span>
+        </div>
+        <div className="summary-counts">
+          <span className="count short">{counts.short} difícil</span>
+          <span className="count standard">{counts.standard} padrão</span>
+          <span className="count long">{counts.long} fácil</span>
+        </div>
+        <ul className="summary-list">
+          {record.entries.map((entry) => {
+            const known = cardsById.has(entry.id)
+            return (
+              <li key={entry.id}>
+                <button
+                  className="entry"
+                  disabled={!known}
+                  onClick={() => known && setBrowseId(entry.id)}
+                >
+                  <span className={`dot ${entry.result}`} aria-hidden="true" />
+                  <span className="entry-text">{entry.text}</span>
+                  <span className="entry-translation">{entry.translation}</span>
+                </button>
+              </li>
+            )
+          })}
+        </ul>
+      </div>
+    )
+  }
+
   const dueTotal = queue.length
   const showOriginal =
     !!activeCard && !!activeCard.original && activeCard.original.toLowerCase() !== activeCard.text.toLowerCase()
+  const previousSessions = lastSession ? sessions.slice(1) : sessions
 
   return (
     <main className="app-shell">
@@ -365,8 +655,21 @@ export default function App() {
         <div className="chips">
           <span className="chip due">{dueTotal} na fila</span>
           <span className="chip done">{doneCount} feitas</span>
+          {!isOnline && <span className="chip offline">✈️ offline</span>}
+          {isOnline && fromCache && <span className="chip offline">dados locais</span>}
           {pendingCount > 0 && <span className="chip pending">{pendingCount} p/ sincronizar</span>}
           {isDemo && <span className="chip demo">modo demo</span>}
+          <button
+            className="icon-button"
+            onClick={() => {
+              setSearchOpen((value) => !value)
+              setSearchQuery('')
+              setBrowseId(null)
+            }}
+            aria-label="Buscar expressões"
+          >
+            🔍
+          </button>
           <button className="icon-button" onClick={() => setShowSettings((value) => !value)} aria-label="Configurações">
             ⚙️
           </button>
@@ -390,6 +693,27 @@ export default function App() {
             App da Web (executar como você, acesso: qualquer pessoa com o link) → copie a URL <code>/exec</code>.
             O progresso é gravado na aba <strong>Progresso</strong>; a aba de palavras nunca é alterada.
           </small>
+        </section>
+      )}
+
+      {searchOpen && (
+        <section className="searchbar">
+          <input
+            ref={searchInputRef}
+            type="search"
+            placeholder="Buscar expressão, tradução ou exemplo…"
+            value={searchQuery}
+            onChange={(event) => setSearchQuery(event.target.value)}
+            aria-label="Buscar expressões"
+          />
+          <button
+            onClick={() => {
+              setSearchOpen(false)
+              setSearchQuery('')
+            }}
+          >
+            Fechar
+          </button>
         </section>
       )}
 
@@ -426,7 +750,34 @@ export default function App() {
 
       {status !== 'error' && (
         <section className="flashcard" aria-live="polite">
-          {status === 'loading' && !cards.length ? (
+          {browseCard ? (
+            renderCardDetail(browseCard)
+          ) : searchOpen ? (
+            <div className="search-results">
+              {searchQuery.trim() === '' ? (
+                <p className="search-hint">Digite para buscar entre {cards.length} expressões salvas.</p>
+              ) : searchResults.length === 0 ? (
+                <p className="search-hint">Nada encontrado para “{searchQuery}”.</p>
+              ) : (
+                <ul>
+                  {searchResults.map((card) => {
+                    const language = detectLanguage(card)
+                    return (
+                      <li key={card.id}>
+                        <button className="result" onClick={() => setBrowseId(card.id)}>
+                          <span className="result-text">
+                            {card.text}
+                            <small>{language === 'fr-FR' ? '🇫🇷' : '🇬🇧'} {card.nextReview ? `caixa ${card.box}` : 'nova'}</small>
+                          </span>
+                          <span className="result-translation">{card.translation}</span>
+                        </button>
+                      </li>
+                    )
+                  })}
+                </ul>
+              )}
+            </div>
+          ) : status === 'loading' && !cards.length ? (
             <div className="done-state">
               <h2>Carregando cards…</h2>
             </div>
@@ -517,14 +868,37 @@ export default function App() {
             <div className="done-state">
               <h2>Revisão concluída 🎉</h2>
               <p>
-                {doneCount > 0
-                  ? `Você revisou ${doneCount} ${doneCount === 1 ? 'card' : 'cards'} nesta sessão.`
+                {lastSession
+                  ? 'Sessão salva. Toque numa expressão para revê-la.'
                   : 'Nenhum card vencido para o filtro selecionado.'}
               </p>
+
+              {lastSession && renderSummary(lastSession, 'Resumo da sessão')}
+
               {remainingNew > 0 && (
                 <button className="more-new" onClick={() => setDataVersion((version) => version + 1)}>
                   Estudar +{Math.min(NEW_PER_BATCH, remainingNew)} palavras novas
                 </button>
+              )}
+
+              {previousSessions.length > 0 && (
+                <div className="history">
+                  <h3>Sessões anteriores</h3>
+                  <ul>
+                    {previousSessions.map((record, index) => (
+                      <li key={record.at}>
+                        <button
+                          className="history-item"
+                          onClick={() => setExpandedSession(expandedSession === index ? null : index)}
+                        >
+                          <span>{formatSessionDate(record.at)}</span>
+                          <span>{record.entries.length} cards</span>
+                        </button>
+                        {expandedSession === index && renderSummary(record, 'Sessão')}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
               )}
             </div>
           )}
