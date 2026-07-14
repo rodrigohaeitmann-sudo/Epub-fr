@@ -319,6 +319,8 @@ export default function App() {
   const flushing = useRef(false)
   const cardsRef = useRef<Card[]>([])
   const prevQueueLength = useRef(0)
+  // Cards já reapresentados neste bloco por "pouco tempo": cada um volta uma única vez.
+  const requeuedIds = useRef<Set<string>>(new Set())
   const searchInputRef = useRef<HTMLInputElement>(null)
 
   const cardsById = useMemo(() => new Map(cards.map((card) => [card.id, card])), [cards])
@@ -444,13 +446,16 @@ export default function App() {
   const activeLanguage: Language = activeCard ? detectLanguage(activeCard) : 'en-US'
   const browseCard = browseId ? cardsById.get(browseId) : undefined
 
-  // Pools do menu inicial (respeitando o filtro de idioma).
+  // Pools do menu inicial (respeitando o filtro de idioma). Cards já estudados
+  // hoje ficam de fora dos próximos blocos — só voltam a partir do dia seguinte.
   const pools = useMemo(() => {
     const today = todayKey()
     const eligible = cards.filter((card) => languageFilter === 'all' || detectLanguage(card) === languageFilter)
     const seen = eligible.filter((card) => !!card.nextReview)
+    const reviewable = seen.filter((card) => !(card.lastReviewedAt === today && card.nextReview > today))
     return {
       seen: seen.length,
+      reviewable: reviewable.length,
       due: seen.filter((card) => card.nextReview <= today).length,
       fresh: eligible.filter((card) => !card.nextReview).length,
     }
@@ -468,7 +473,11 @@ export default function App() {
     const eligible = cardsRef.current.filter(
       (card) => languageFilter === 'all' || detectLanguage(card) === languageFilter,
     )
-    const ordered = reviewOrder(eligible.filter((card) => !!card.nextReview), today)
+    // Já estudados hoje não entram em novos blocos: voltam no dia seguinte.
+    const reviewable = eligible.filter(
+      (card) => !!card.nextReview && !(card.lastReviewedAt === today && card.nextReview > today),
+    )
+    const ordered = reviewOrder(reviewable, today)
     const fresh = shuffle(eligible.filter((card) => !card.nextReview))
 
     let block: Card[] = []
@@ -493,6 +502,7 @@ export default function App() {
     setMode(nextMode)
     setQueue(block.map((card) => card.id))
     setBlockSize(block.length)
+    requeuedIds.current = new Set()
     setSessionEntries([])
     setLastSession(null)
     setDoneCount(0)
@@ -608,8 +618,13 @@ export default function App() {
       })
       setQueue((current) => {
         const rest = current.slice(1)
-        // "Pouco tempo": além de voltar amanhã, reaparece no fim desta sessão.
-        return result === 'short' ? [...rest, activeCard.id] : rest
+        // "Pouco tempo": reaparece no fim do bloco, mas UMA única vez —
+        // se for marcado difícil de novo, sai do bloco e volta amanhã.
+        if (result === 'short' && !requeuedIds.current.has(activeCard.id)) {
+          requeuedIds.current.add(activeCard.id)
+          return [...rest, activeCard.id]
+        }
+        return rest
       })
       setDoneCount((count) => count + 1)
       setIsRevealed(false)
@@ -982,7 +997,7 @@ export default function App() {
               <div className="mode-grid">
                 <button
                   className="mode-card suggested"
-                  disabled={pools.seen + pools.fresh === 0}
+                  disabled={pools.reviewable + pools.fresh === 0}
                   onClick={() => startStudy('suggested')}
                 >
                   <span className="mode-icon" aria-hidden="true">✨</span>
@@ -990,14 +1005,20 @@ export default function App() {
                   <span className="mode-desc">5 revisões + 5 novas aleatórias</span>
                   <small>o equilíbrio ideal para o dia a dia</small>
                 </button>
-                <button className="mode-card review" disabled={pools.seen === 0} onClick={() => startStudy('review')}>
+                <button
+                  className="mode-card review"
+                  disabled={pools.reviewable === 0}
+                  onClick={() => startStudy('review')}
+                >
                   <span className="mode-icon" aria-hidden="true">🔁</span>
                   <strong>Revisão</strong>
                   <span className="mode-desc">10 cards já vistos, difíceis primeiro</span>
                   <small>
-                    {pools.due > 0
-                      ? `${pools.due} vencido${pools.due === 1 ? '' : 's'} hoje · ${pools.seen} no total`
-                      : `nada vencido · ${pools.seen} já vistas`}
+                    {pools.reviewable === 0 && pools.seen > 0
+                      ? 'todas revisadas por hoje 🎉'
+                      : pools.due > 0
+                        ? `${pools.due} vencido${pools.due === 1 ? '' : 's'} hoje · ${pools.reviewable} disponíveis`
+                        : `nada vencido · ${pools.reviewable} disponíveis`}
                   </small>
                 </button>
                 <button className="mode-card fresh" disabled={pools.fresh === 0} onClick={() => startStudy('new')}>
