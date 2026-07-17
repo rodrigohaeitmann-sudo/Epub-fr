@@ -1,8 +1,9 @@
 /* Service worker: mantém o app utilizável offline.
    Navegações: rede primeiro (para pegar versões novas), cache como fallback.
    Assets (JS/CSS/ícones, nomes com hash): cache primeiro. */
-const CACHE = 'revisao-shell-v1'
+const CACHE = 'revisao-shell-v2'
 const CORE = ['./', './index.html', './manifest.webmanifest']
+const FONT_HOSTS = ['fonts.googleapis.com', 'fonts.gstatic.com']
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
@@ -26,6 +27,25 @@ self.addEventListener('fetch', (event) => {
   const request = event.request
   if (request.method !== 'GET') return
   const url = new URL(request.url)
+
+  // Fontes (Instrument Sans): cache-first para o tema funcionar offline.
+  if (FONT_HOSTS.includes(url.hostname)) {
+    event.respondWith(
+      caches.match(request, { ignoreVary: true }).then(
+        (cached) =>
+          cached ||
+          fetch(request).then((response) => {
+            if (response.ok) {
+              const copy = response.clone()
+              caches.open(CACHE).then((cache) => cache.put(request, copy))
+            }
+            return response
+          }),
+      ),
+    )
+    return
+  }
+
   if (url.origin !== location.origin) return
 
   if (request.mode === 'navigate') {

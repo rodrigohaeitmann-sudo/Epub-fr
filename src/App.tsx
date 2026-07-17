@@ -48,10 +48,18 @@ const MAX_SESSIONS = 30
 const INTERVALS = [1, 3, 7, 16, 35, 70, 140]
 const SHORT_INTERVAL_DAYS = 1
 
-const RESULT_META: Record<ReviewResult, { label: string; hint: string; key: string }> = {
-  short: { label: 'Pouco tempo', hint: 'ainda difícil', key: '1' },
-  standard: { label: 'Tempo padrão', hint: 'lembrei com esforço', key: '2' },
-  long: { label: 'Muito tempo', hint: 'fácil, já sei', key: '3' },
+const RESULT_META: Record<ReviewResult, { label: string; key: string }> = {
+  short: { label: 'Difícil', key: '1' },
+  standard: { label: 'Médio', key: '2' },
+  long: { label: 'Fácil', key: '3' },
+}
+
+const THEME_KEY = 'revfr-theme'
+
+function initialTheme(): 'light' | 'dark' {
+  const stored = localStorage.getItem(THEME_KEY)
+  if (stored === 'light' || stored === 'dark') return stored
+  return window.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
 }
 
 function todayKey() {
@@ -290,18 +298,17 @@ const DEMO_CARDS: Card[] = [
 export default function App() {
   const [scriptUrl, setScriptUrl] = useState(() => localStorage.getItem(SCRIPT_URL_KEY) || '')
   const [draftUrl, setDraftUrl] = useState(scriptUrl)
-  const [showSettings, setShowSettings] = useState(!scriptUrl)
+  const [theme, setTheme] = useState<'light' | 'dark'>(() => initialTheme())
   const [status, setStatus] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle')
   const [errorMessage, setErrorMessage] = useState('')
 
   const [cards, setCards] = useState<Card[]>([])
   const [queue, setQueue] = useState<string[]>([])
-  const [screen, setScreen] = useState<'home' | 'study'>('home')
+  const [screen, setScreen] = useState<'home' | 'study' | 'stats' | 'settings'>(scriptUrl ? 'home' : 'settings')
   const [mode, setMode] = useState<StudyMode | null>(null)
   const [blockSize, setBlockSize] = useState(0)
   const [languageFilter, setLanguageFilter] = useState<'all' | Language>('all')
   const [isRevealed, setIsRevealed] = useState(false)
-  const [doneCount, setDoneCount] = useState(0)
   const [pendingCount, setPendingCount] = useState(() => loadPending().length)
   const [isOnline, setIsOnline] = useState(() => navigator.onLine)
   const [fromCache, setFromCache] = useState(false)
@@ -385,6 +392,15 @@ export default function App() {
   useEffect(() => {
     loadCards(scriptUrl)
   }, [scriptUrl, loadCards])
+
+  // Aplica o tema (claro/noturno) e persiste a preferência (chave revfr-theme).
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme
+    localStorage.setItem(THEME_KEY, theme)
+    document
+      .querySelector('meta[name="theme-color"]')
+      ?.setAttribute('content', theme === 'dark' ? '#101317' : '#f5f6f7')
+  }, [theme])
 
   useEffect(() => {
     cardsRef.current = cards
@@ -505,7 +521,6 @@ export default function App() {
     requeuedIds.current = new Set()
     setSessionEntries([])
     setLastSession(null)
-    setDoneCount(0)
     setIsRevealed(false)
     setBrowseId(null)
     setSearchOpen(false)
@@ -626,7 +641,6 @@ export default function App() {
         }
         return rest
       })
-      setDoneCount((count) => count + 1)
       setIsRevealed(false)
       if ('speechSynthesis' in window) window.speechSynthesis.cancel()
     },
@@ -648,14 +662,16 @@ export default function App() {
         else if (searchOpen) {
           setSearchOpen(false)
           setSearchQuery('')
+        } else if (screen === 'stats' || screen === 'settings') {
+          setScreen('home')
         }
         return
       }
       if (picked || browseId || searchOpen || screen !== 'study') return
       if (event.code === 'Space' || event.key === 'Enter') {
-        if (!isRevealed && activeCard) {
+        if (activeCard) {
           event.preventDefault()
-          setIsRevealed(true)
+          setIsRevealed((value) => !value)
         }
         return
       }
@@ -678,8 +694,7 @@ export default function App() {
     const trimmed = draftUrl.trim()
     localStorage.setItem(SCRIPT_URL_KEY, trimmed)
     setScriptUrl(trimmed)
-    setShowSettings(!trimmed)
-    setDoneCount(0)
+    if (trimmed) setScreen('home')
   }
 
   function practiceNow(id: string) {
@@ -802,7 +817,7 @@ export default function App() {
         </div>
         <div className="summary-counts">
           <span className="count short">{counts.short} difícil</span>
-          <span className="count standard">{counts.standard} padrão</span>
+          <span className="count standard">{counts.standard} médio</span>
           <span className="count long">{counts.long} fácil</span>
         </div>
         <ul className="summary-list">
@@ -831,40 +846,29 @@ export default function App() {
     !!activeCard && !!activeCard.original && activeCard.original.toLowerCase() !== activeCard.text.toLowerCase()
   const studying = screen === 'study'
 
-  return (
-    <main className="app-shell">
-      <header className="topbar">
-        <div className="brand">
-          <h1>Revisão EN·FR</h1>
-          <p>revisão espaçada da sua planilha</p>
-        </div>
-        <div className="chips">
-          {studying && <span className="chip due">{queue.length} na fila</span>}
-          {studying && <span className="chip done">{doneCount} feitas</span>}
-          {!studying && <span className="chip due">{pools.due} p/ revisar hoje</span>}
-          {!isOnline && <span className="chip offline">✈️ offline</span>}
-          {isOnline && fromCache && <span className="chip offline">dados locais</span>}
-          {pendingCount > 0 && <span className="chip pending">{pendingCount} p/ sincronizar</span>}
-          {isDemo && <span className="chip demo">modo demo</span>}
-          <button
-            className="icon-button"
-            onClick={() => {
-              setSearchOpen((value) => !value)
-              setSearchQuery('')
-              setBrowseId(null)
-            }}
-            aria-label="Buscar expressões"
-          >
-            🔍
+  function renderSettings() {
+    return (
+      <div className="subscreen">
+        <div className="subscreen-head">
+          <button className="back" aria-label="Voltar" onClick={() => setScreen('home')}>
+            ←
           </button>
-          <button className="icon-button" onClick={() => setShowSettings((value) => !value)} aria-label="Configurações">
-            ⚙️
-          </button>
+          <h2>Ajustes</h2>
         </div>
-      </header>
 
-      {showSettings && (
-        <section className="settings">
+        <div className="setting-block">
+          <span className="setting-title">Tema</span>
+          <div className="theme-toggle">
+            <button className={theme === 'light' ? 'active' : ''} onClick={() => setTheme('light')}>
+              ☀️ Claro
+            </button>
+            <button className={theme === 'dark' ? 'active' : ''} onClick={() => setTheme('dark')}>
+              🌙 Noturno
+            </button>
+          </div>
+        </div>
+
+        <div className="setting-block">
           <label htmlFor="script-url">URL do App da Web (Apps Script)</label>
           <div className="settings-row">
             <input
@@ -880,7 +884,120 @@ export default function App() {
             App da Web (executar como você, acesso: qualquer pessoa com o link) → copie a URL <code>/exec</code>.
             O progresso é gravado na aba <strong>Progresso</strong>; a aba de palavras nunca é alterada.
           </small>
-        </section>
+        </div>
+      </div>
+    )
+  }
+
+  function renderStats() {
+    const seenCards = cards.filter((card) => !!card.nextReview)
+    const totalReviews = cards.reduce((sum, card) => sum + card.repetitions, 0)
+    const boxCounts = INTERVALS.map((_, box) => seenCards.filter((card) => card.box === box).length)
+    const maxBox = Math.max(1, ...boxCounts)
+    return (
+      <div className="subscreen">
+        <div className="subscreen-head">
+          <button className="back" aria-label="Voltar" onClick={() => setScreen('home')}>
+            ←
+          </button>
+          <h2>Estatísticas</h2>
+        </div>
+
+        <div className="stats-grid">
+          <div className="stat-tile">
+            <strong>{pools.due}</strong>
+            <span>para revisar hoje</span>
+          </div>
+          <div className="stat-tile">
+            <strong>{pools.seen}</strong>
+            <span>já estudadas</span>
+          </div>
+          <div className="stat-tile">
+            <strong>{pools.fresh}</strong>
+            <span>novas na fila</span>
+          </div>
+          <div className="stat-tile">
+            <strong>{totalReviews}</strong>
+            <span>revisões feitas</span>
+          </div>
+        </div>
+
+        <div className="boxes-panel">
+          <span className="setting-title">Caixas (Leitner)</span>
+          {boxCounts.map((count, box) => (
+            <div className="box-row" key={box}>
+              <span className="name">caixa {box} · {INTERVALS[box]}d</span>
+              <span className="bar">
+                <i style={{ width: `${(count / maxBox) * 100}%` }} />
+              </span>
+              <span className="value">{count}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    )
+  }
+
+  const progressPercent = blockSize ? Math.min((sessionEntries.length / blockSize) * 100, 100) : 0
+
+  function exitStudy() {
+    setScreen('home')
+    setQueue([])
+    setSessionEntries([])
+    setIsRevealed(false)
+    if ('speechSynthesis' in window) window.speechSynthesis.cancel()
+  }
+
+  return (
+    <main className="app-shell">
+      {!studying && (
+        <header className="topbar">
+          <div className="brand">
+            <h1>Revisão EN·FR</h1>
+            <p>revisão espaçada da sua planilha</p>
+          </div>
+          <div className="chips">
+            {!isOnline && <span className="chip offline">✈️ offline</span>}
+            {isOnline && fromCache && <span className="chip offline">dados locais</span>}
+            {pendingCount > 0 && <span className="chip pending">{pendingCount} p/ sincronizar</span>}
+            {isDemo && <span className="chip demo">demo</span>}
+            <button
+              className="icon-button"
+              onClick={() => {
+                setSearchOpen((value) => !value)
+                setSearchQuery('')
+                setBrowseId(null)
+              }}
+              aria-label="Buscar expressões"
+            >
+              🔍
+            </button>
+            <button
+              className="icon-button"
+              onClick={() => {
+                setScreen(screen === 'stats' ? 'home' : 'stats')
+                setSearchOpen(false)
+                setSearchQuery('')
+                setBrowseId(null)
+              }}
+              aria-label="Estatísticas"
+            >
+              📊
+            </button>
+            <button
+              className="icon-button"
+              onClick={() => {
+                setScreen(screen === 'settings' ? 'home' : 'settings')
+                setSearchOpen(false)
+                setSearchQuery('')
+                setBrowseId(null)
+              }}
+              aria-label="Ajustes"
+            >
+              ⚙️
+            </button>
+          </div>
+        </header>
       )}
 
       {searchOpen && (
@@ -904,7 +1021,7 @@ export default function App() {
         </section>
       )}
 
-      {!studying && !browseCard && !searchOpen && (
+      {screen === 'home' && !browseCard && !searchOpen && (
         <div className="filters" role="tablist" aria-label="Filtro de idioma">
           {(
             [
@@ -927,23 +1044,16 @@ export default function App() {
         </div>
       )}
 
-      {studying && !browseCard && !searchOpen && (
-        <div className="study-header">
-          <button
-            className="menu-back"
-            onClick={() => {
-              setScreen('home')
-              setQueue([])
-              setSessionEntries([])
-              setIsRevealed(false)
-              if ('speechSynthesis' in window) window.speechSynthesis.cancel()
-            }}
-          >
-            ← Menu
+      {studying && (
+        <div className="study-bar">
+          <button className="exit" aria-label="Sair da sessão" onClick={exitStudy}>
+            ✕
           </button>
-          <span className="study-progress">
-            {MODE_LABEL[mode ?? 'practice']} ·{' '}
-            {queue.length ? `${Math.min(sessionEntries.length + 1, blockSize)}/${blockSize}` : 'concluído'}
+          <div className="progress-track">
+            <div className="progress-fill" style={{ width: `${progressPercent}%` }} />
+          </div>
+          <span className="study-count">
+            {queue.length ? `${Math.min(sessionEntries.length + 1, blockSize)}/${blockSize}` : `${blockSize}/${blockSize}`}
           </span>
         </div>
       )}
@@ -987,13 +1097,24 @@ export default function App() {
                 </ul>
               )}
             </div>
+          ) : screen === 'settings' ? (
+            renderSettings()
+          ) : screen === 'stats' ? (
+            renderStats()
           ) : status === 'loading' && !cards.length ? (
             <div className="done-state">
               <h2>Carregando cards…</h2>
             </div>
-          ) : !studying ? (
+          ) : screen === 'home' ? (
             <div className="home">
-              <h2 className="home-title">O que estudar agora?</h2>
+              <div className="hero-panel">
+                <div className="hero-number">{pools.due}</div>
+                <div className="hero-label">
+                  para revisar hoje · {pools.fresh} nova{pools.fresh === 1 ? '' : 's'} na fila
+                </div>
+              </div>
+
+              <p className="section-label">O que estudar agora?</p>
               <div className="mode-grid">
                 <button
                   className="mode-card suggested"
@@ -1052,115 +1173,124 @@ export default function App() {
             </div>
           ) : activeCard ? (
             <>
-              <div className="card-meta">
-                <span className={`lang ${activeLanguage === 'fr-FR' ? 'fr' : 'en'}`}>
-                  {activeLanguage === 'fr-FR' ? '🇫🇷 Francês' : '🇬🇧 Inglês'}
-                </span>
-                {activeCard.type && <span>{activeCard.type}</span>}
-                <span>caixa {activeCard.box}</span>
-                {activeCard.repetitions > 0 && <span>{activeCard.repetitions}× revisada</span>}
-              </div>
-
-              <h2 className="expression">{activeCard.text}</h2>
-              {activeCard.ipa && <p className="ipa">{activeCard.ipa}</p>}
-
-              <div className="listen-row">
-                <button className="listen" onClick={() => speak(activeCard.text, activeLanguage)}>
-                  🔊 Ouvir
-                </button>
-                {showOriginal && (
-                  <button className="listen ghost" onClick={() => speak(activeCard.original, activeLanguage)}>
-                    💬 Ouvir frase original
-                  </button>
-                )}
-              </div>
-
-              {showOriginal && (
-                <p
-                  className="original selectable"
-                  onMouseUp={() => handleTextSelection(activeLanguage)}
-                  onTouchEnd={() => handleTextSelection(activeLanguage)}
-                >
-                  capturado de:{' '}
-                  <em>
-                    “
-                    <SelectableText
-                      text={activeCard.original}
-                      term={activeCard.text}
-                      language={activeLanguage}
-                      onPick={pick}
-                    />
-                    ”
-                  </em>
-                </p>
-              )}
-
-              {isRevealed ? (
-                <div className="answer">
-                  <p className="translation">{activeCard.translation || 'Sem tradução na planilha.'}</p>
-
-                  {activeCard.ipaComment && (
-                    <p className="ipa-tip">
-                      <span aria-hidden="true">🗣️</span> {activeCard.ipaComment}
-                    </p>
-                  )}
-
-                  {activeCard.examples.length > 0 && (
-                    <div className="examples">
-                      <h3>
-                        Exemplos <span className="examples-hint">· toque numa palavra para ouvir ou consultar</span>
-                      </h3>
-                      {activeCard.examples.map((example, index) => (
-                        <div className="example" key={index}>
-                          <div className="example-line">
-                            <p
-                              className="example-text selectable"
-                              onMouseUp={() => handleTextSelection(activeLanguage)}
-                              onTouchEnd={() => handleTextSelection(activeLanguage)}
-                            >
-                              <SelectableText
-                                text={example.text}
-                                term={activeCard.text}
-                                language={activeLanguage}
-                                onPick={pick}
-                              />
-                            </p>
-                            <button
-                              className="mini-listen"
-                              aria-label="Ouvir exemplo"
-                              onClick={() => speak(example.text, activeLanguage)}
-                            >
-                              🔊
-                            </button>
-                          </div>
-                          {example.translation && <p className="example-translation">{example.translation}</p>}
-                        </div>
-                      ))}
+              <div
+                className="flipcard"
+                onClick={() => {
+                  if (window.getSelection()?.toString().trim()) return
+                  setIsRevealed((value) => !value)
+                }}
+              >
+                <div className={`flip-inner ${isRevealed ? 'flipped' : ''}`}>
+                  <div className="face front">
+                    <div className="card-meta">
+                      <span className="lang">{activeLanguage === 'fr-FR' ? '🇫🇷 Francês' : '🇬🇧 Inglês'}</span>
+                      {activeCard.type && <span>{activeCard.type}</span>}
+                      <span>caixa {activeCard.box}</span>
+                      {activeCard.repetitions > 0 && <span>{activeCard.repetitions}× revisada</span>}
                     </div>
-                  )}
-                </div>
-              ) : (
-                <button className="reveal" onClick={() => setIsRevealed(true)}>
-                  Mostrar resposta <kbd>espaço</kbd>
-                </button>
-              )}
 
-              <div className="review-actions">
-                {(Object.keys(RESULT_META) as ReviewResult[]).map((result) => {
-                  const days = scheduleDays(activeCard.box, result).days
-                  return (
-                    <button key={result} className={result} disabled={!isRevealed} onClick={() => answer(result)}>
-                      <strong>{RESULT_META[result].label}</strong>
-                      <span>{RESULT_META[result].hint}</span>
-                      <small>{days === 1 ? 'volta amanhã' : `volta em ${days} dias`}</small>
-                    </button>
-                  )
-                })}
+                    <h2 className="expression">{activeCard.text}</h2>
+                    {activeCard.ipa && <p className="ipa">{activeCard.ipa}</p>}
+
+                    <div className="listen-row">
+                      <button
+                        className="listen"
+                        onClick={(event) => {
+                          event.stopPropagation()
+                          speak(activeCard.text, activeLanguage)
+                        }}
+                      >
+                        🔊 Ouvir
+                      </button>
+                      {showOriginal && (
+                        <button
+                          className="listen ghost"
+                          onClick={(event) => {
+                            event.stopPropagation()
+                            speak(activeCard.original, activeLanguage)
+                          }}
+                        >
+                          💬 Frase original
+                        </button>
+                      )}
+                    </div>
+
+                    {showOriginal && (
+                      <p className="original">
+                        capturado de: <em>“{activeCard.original}”</em>
+                      </p>
+                    )}
+
+                    <p className="flip-hint">toque para virar</p>
+                  </div>
+
+                  <div className="face back">
+                    <p className="translation">{activeCard.translation || 'Sem tradução na planilha.'}</p>
+
+                    {activeCard.ipaComment && (
+                      <p className="ipa-tip">
+                        <span aria-hidden="true">🗣️</span> {activeCard.ipaComment}
+                      </p>
+                    )}
+
+                    {activeCard.examples.length > 0 && (
+                      <div className="examples">
+                        <h3>
+                          Exemplos <span className="examples-hint">· toque numa palavra para consultar</span>
+                        </h3>
+                        {activeCard.examples.map((example, index) => (
+                          <div className="example" key={index}>
+                            <div className="example-line">
+                              <p
+                                className="example-text selectable"
+                                onMouseUp={() => handleTextSelection(activeLanguage)}
+                                onTouchEnd={() => handleTextSelection(activeLanguage)}
+                              >
+                                <SelectableText
+                                  text={example.text}
+                                  term={activeCard.text}
+                                  language={activeLanguage}
+                                  onPick={pick}
+                                />
+                              </p>
+                              <button
+                                className="mini-listen"
+                                aria-label="Ouvir exemplo"
+                                onClick={(event) => {
+                                  event.stopPropagation()
+                                  speak(example.text, activeLanguage)
+                                }}
+                              >
+                                🔊
+                              </button>
+                            </div>
+                            {example.translation && <p className="example-translation">{example.translation}</p>}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
               </div>
+
+              {isRevealed && (
+                <div className="review-actions">
+                  {(Object.keys(RESULT_META) as ReviewResult[]).map((result) => {
+                    const days = scheduleDays(activeCard.box, result).days
+                    return (
+                      <button key={result} className={result} onClick={() => answer(result)}>
+                        <strong>{RESULT_META[result].label}</strong>
+                        <small>{days === 1 ? 'volta amanhã' : `volta em ${days} dias`}</small>
+                      </button>
+                    )
+                  })}
+                </div>
+              )}
             </>
           ) : (
             <div className="done-state">
-              <h2>Bloco concluído 🎉</h2>
+              <div className="done-icon" aria-hidden="true">✓</div>
+              <h2>Bloco concluído</h2>
               <p>
                 {lastSession
                   ? 'Progresso salvo. Toque numa expressão para revê-la.'
@@ -1171,11 +1301,11 @@ export default function App() {
 
               <div className="done-actions">
                 <button className="more-new" onClick={() => setScreen('home')}>
-                  ← Voltar ao menu
+                  Voltar ao início
                 </button>
                 {mode && mode !== 'practice' && (
                   <button className="again" onClick={() => startStudy(mode)}>
-                    Mais um bloco
+                    Nova sessão
                   </button>
                 )}
               </div>
@@ -1257,10 +1387,12 @@ export default function App() {
         </div>
       )}
 
-      <footer className="foot">
-        <span>{cards.length} itens na planilha</span>
-        <span>atalhos: espaço revela · P ouve · 1 / 2 / 3 respondem</span>
-      </footer>
+      {!studying && (
+        <footer className="foot">
+          <span>{cards.length} itens na planilha</span>
+          <span>atalhos: espaço vira · P ouve · 1 / 2 / 3 respondem</span>
+        </footer>
+      )}
     </main>
   )
 }

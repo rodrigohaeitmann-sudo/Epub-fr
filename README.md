@@ -1,13 +1,17 @@
 # Revisão EN·FR — revisão espaçada da sua planilha
 
-Webapp (React + Vite, PWA) para revisar palavras e expressões em inglês e
+Webapp (React + Vite, PWA) com o tema "Claro & essencial" (Instrument Sans, azul
+contido) e variante noturna — tokens e regras em `design/` do export do Claude
+Design; alternância de tema em Ajustes (persistida em `revfr-theme`).
+
+Webapp para revisar palavras e expressões em inglês e
 francês salvas em uma planilha Google. Você vê e ouve a expressão, tenta
 lembrar o significado, revela a resposta (tradução, dica de pronúncia e
 exemplos de uso) e decide quando ela deve voltar:
 
-- **Pouco tempo** — ainda difícil: volta amanhã (e reaparece no fim da sessão);
-- **Tempo padrão** — lembrou com esforço: sobe uma caixa (1 → 3 → 7 → 16 → 35 → 70 → 140 dias);
-- **Muito tempo** — fácil: sobe duas caixas.
+- **Difícil** — volta amanhã (e reaparece uma vez no fim da sessão);
+- **Médio** — lembrou com esforço: sobe uma caixa (1 → 3 → 7 → 16 → 35 → 70 → 140 dias);
+- **Fácil** — sobe duas caixas.
 
 O progresso é gravado por um Google Apps Script na aba `Progresso` da própria
 planilha — a aba de palavras continua dinâmica e nunca é alterada.
