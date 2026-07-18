@@ -86,11 +86,22 @@ function getCards_() {
       examples.push({ text: sentence, translation: cell_(row, map.examples[e].translation) })
     }
 
+    const conjugations = []
+    Object.keys(map.tenses).forEach(function (tenseKey) {
+      const slot = map.tenses[tenseKey]
+      const fr = cell_(row, slot.fr)
+      if (!fr) return
+      conjugations.push({ tense: slot.label, fr: fr, pt: cell_(row, slot.pt) })
+    })
+
     cards.push({
       id: id,
       text: text,
       original: cell_(row, map.original),
       type: cell_(row, map.type),
+      grammarClass: cell_(row, map.grammarClass),
+      verbType: cell_(row, map.verbType),
+      conjugations: conjugations,
       ipa: cell_(row, map.ipa),
       ipaComment: cell_(row, map.ipaComment),
       translation: cell_(row, map.translation),
@@ -277,7 +288,14 @@ function mapHeaders_(headerRow) {
   const index = {
     id: -1, text: -1, original: -1, language: -1, type: -1,
     ipa: -1, ipaComment: -1, translation: -1, context: -1, chapter: -1, source: -1,
+    grammarClass: -1, verbType: -1,
     examples: [],
+    tenses: {
+      present: { label: 'Présent', fr: -1, pt: -1 },
+      passeCompose: { label: 'Passé composé', fr: -1, pt: -1 },
+      imparfait: { label: 'Imparfait', fr: -1, pt: -1 },
+      futur: { label: 'Futur simple', fr: -1, pt: -1 },
+    },
   }
   const exampleTexts = {}
   const exampleTranslations = {}
@@ -289,6 +307,12 @@ function mapHeaders_(headerRow) {
     else if (key.indexOf('texto original') === 0 || key === 'original') index.original = i
     else if (key === 'idioma' || key === 'lingua' || key === 'language') index.language = i
     else if (key === 'tipo' || key === 'type') index.type = i
+    else if (key.indexOf('classe gramatical') === 0 || key === 'classe') index.grammarClass = i
+    else if (key.indexOf('conjugacao') === 0) index.verbType = i
+    else if (key.indexOf('present') === 0) tense_(index.tenses.present, key, i)
+    else if (key.indexOf('passe compose') === 0) tense_(index.tenses.passeCompose, key, i)
+    else if (key.indexOf('imparfait') === 0) tense_(index.tenses.imparfait, key, i)
+    else if (key.indexOf('futur') === 0) tense_(index.tenses.futur, key, i)
     else if (key.indexOf('comentario ipa') === 0 || key === 'comentario pronuncia') index.ipaComment = i
     else if (key === 'ipa' || key === 'pronuncia') index.ipa = i
     else if (key === 'contexto' || key === 'context' || key === 'frase') index.context = i
@@ -323,6 +347,12 @@ function mapHeaders_(headerRow) {
 
   if (index.text < 0) throw new Error('A aba precisa de uma coluna "Expressão" (ou "Texto").')
   return index
+}
+
+/** Coluna de tempo verbal: com "tradução" no nome é a versão PT, senão a FR. */
+function tense_(slot, key, columnIndex) {
+  if (key.indexOf('traducao') >= 0) slot.pt = columnIndex
+  else slot.fr = columnIndex
 }
 
 function normalizeKey_(raw) {

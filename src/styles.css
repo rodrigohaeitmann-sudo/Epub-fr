@@ -41,10 +41,10 @@
   --easy: #4fb37e;
 }
 
-* { box-sizing: border-box; }
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 body { min-width: 320px; min-height: 100vh; margin: 0; background: var(--bg); color: var(--text); }
 button, input { font: inherit; color: inherit; }
-button { cursor: pointer; background: none; border: 0; }
+button { cursor: pointer; background: none; border: 0; touch-action: manipulation; }
 
 .app-shell {
   min-height: 100vh;
@@ -300,6 +300,11 @@ button { cursor: pointer; background: none; border: 0; }
 }
 .listen.ghost { background: var(--track); color: var(--text); }
 
+/* frente do card: botão de ouvir grande, na parte inferior */
+.front-listen { margin-top: auto; margin-bottom: 0; }
+.listen.xl { flex: 1; padding: 16px; border-radius: 14px; font-size: 16px; }
+.face.front .flip-hint { margin-top: 12px; padding-top: 0; }
+
 .original { margin: 0 0 10px; color: var(--faint); font-size: 13px; line-height: 1.5; }
 .original em { color: var(--sub); font-style: italic; }
 
@@ -547,6 +552,46 @@ mark.pickable { background: var(--accent-soft); color: var(--accent-strong); pad
   color: var(--faint);
 }
 .word-search { width: 100%; padding: 12px; border-radius: 12px; background: var(--accent-soft); color: var(--accent-strong); font-weight: 700; font-size: 14px; }
+
+/* ---------------------------------------------------------------- conjugação */
+.conj-button {
+  align-self: flex-start;
+  margin: 0 0 16px;
+  padding: 11px 14px;
+  border-radius: 12px;
+  border: 1px solid var(--accent-soft2);
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+  font-weight: 700;
+  font-size: 14px;
+}
+.browse .conj-button { margin-bottom: 16px; }
+.conj-sheet { max-height: 80vh; }
+.conj-type { margin: 2px 0 0; color: var(--sub); font-size: 12px; font-weight: 600; }
+.tense { margin-bottom: 14px; }
+.tense h4 {
+  margin: 0 0 6px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+.conj-row {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  align-items: baseline;
+  padding: 7px 10px;
+  border-radius: 8px;
+  text-align: left;
+}
+.conj-row:nth-child(even) { background: var(--track); }
+.conj-row:active { background: var(--accent-soft); }
+.conj-fr { font-weight: 600; font-size: 14px; color: var(--text); }
+.conj-pt { color: var(--sub); font-size: 13px; }
+.conj-hint { margin: 4px 0 0; color: var(--faint); font-size: 12px; text-align: center; }
 
 /* ---------------------------------------------------------------- rodapé */
 .foot { display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; color: var(--faint); font-size: 12px; }
