@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as R
 type ReviewResult = 'short' | 'standard' | 'long'
 type Language = 'en-US' | 'fr-FR'
 type Example = { text: string; translation: string }
+type Conjugation = { tense: string; fr: string; pt: string }
 
 type Card = {
   id: string
@@ -14,6 +15,9 @@ type Card = {
   translation: string
   examples: Example[]
   language: string
+  grammarClass?: string
+  verbType?: string
+  conjugations?: Conjugation[]
   box: number
   repetitions: number
   hardCount: number
@@ -317,6 +321,7 @@ export default function App() {
   const [searchQuery, setSearchQuery] = useState('')
   const [browseId, setBrowseId] = useState<string | null>(null)
   const [picked, setPicked] = useState<{ term: string; language: Language } | null>(null)
+  const [conjugationCard, setConjugationCard] = useState<Card | null>(null)
 
   const [sessionEntries, setSessionEntries] = useState<SessionEntry[]>([])
   const [sessions, setSessions] = useState<SessionRecord[]>(() => loadSessions())
@@ -461,6 +466,15 @@ export default function App() {
   const activeCard = queue.length ? cardsById.get(queue[0]) : undefined
   const activeLanguage: Language = activeCard ? detectLanguage(activeCard) : 'en-US'
   const browseCard = browseId ? cardsById.get(browseId) : undefined
+
+  // Sempre que a frente do card aparece (próximo card ou virada de volta),
+  // o app fala a palavra/expressão automaticamente.
+  useEffect(() => {
+    if (screen !== 'study' || !activeCard || isRevealed) return
+    if (browseId || searchOpen || picked || conjugationCard) return
+    speak(activeCard.text, detectLanguage(activeCard))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeCard?.id, isRevealed, screen])
 
   // Pools do menu inicial (respeitando o filtro de idioma). Cards já estudados
   // hoje ficam de fora dos próximos blocos — só voltam a partir do dia seguinte.
@@ -657,7 +671,8 @@ export default function App() {
         return
       }
       if (event.key === 'Escape') {
-        if (picked) setPicked(null)
+        if (conjugationCard) setConjugationCard(null)
+        else if (picked) setPicked(null)
         else if (browseId) setBrowseId(null)
         else if (searchOpen) {
           setSearchOpen(false)
@@ -667,7 +682,7 @@ export default function App() {
         }
         return
       }
-      if (picked || browseId || searchOpen || screen !== 'study') return
+      if (picked || browseId || searchOpen || conjugationCard || screen !== 'study') return
       if (event.code === 'Space' || event.key === 'Enter') {
         if (activeCard) {
           event.preventDefault()
@@ -684,7 +699,7 @@ export default function App() {
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [isRevealed, activeCard, activeLanguage, answer, browseId, searchOpen, picked, screen])
+  }, [isRevealed, activeCard, activeLanguage, answer, browseId, searchOpen, picked, conjugationCard, screen])
 
   useEffect(() => {
     if (searchOpen) searchInputRef.current?.focus()
@@ -728,7 +743,7 @@ export default function App() {
           <span className={`lang ${language === 'fr-FR' ? 'fr' : 'en'}`}>
             {language === 'fr-FR' ? '🇫🇷 Francês' : '🇬🇧 Inglês'}
           </span>
-          {card.type && <span>{card.type}</span>}
+          {(card.grammarClass || card.type) && <span>{card.grammarClass || card.type}</span>}
           <span>caixa {card.box}</span>
           {card.repetitions > 0 && <span>{card.repetitions}× revisada</span>}
           {card.nextReview && <span>volta {card.nextReview}</span>}
@@ -767,6 +782,11 @@ export default function App() {
             <p className="ipa-tip">
               <span aria-hidden="true">🗣️</span> {card.ipaComment}
             </p>
+          )}
+          {(card.conjugations?.length ?? 0) > 0 && (
+            <button className="conj-button" onClick={() => setConjugationCard(card)}>
+              📖 Conjugação{card.verbType ? ` · ${card.verbType}` : ''}
+            </button>
           )}
           {card.examples.length > 0 && (
             <div className="examples">
@@ -1175,7 +1195,11 @@ export default function App() {
             <>
               <div
                 className="flipcard"
-                onClick={() => {
+                onClick={(event) => {
+                  // vira só no "momento oportuno": nunca a partir de botões,
+                  // palavras tocáveis ou da área de exemplos (consulta)
+                  const target = event.target as Element
+                  if (target.closest('button, .pickable, .examples, .ipa-tip')) return
                   if (window.getSelection()?.toString().trim()) return
                   setIsRevealed((value) => !value)
                 }}
@@ -1184,7 +1208,9 @@ export default function App() {
                   <div className="face front">
                     <div className="card-meta">
                       <span className="lang">{activeLanguage === 'fr-FR' ? '🇫🇷 Francês' : '🇬🇧 Inglês'}</span>
-                      {activeCard.type && <span>{activeCard.type}</span>}
+                      {(activeCard.grammarClass || activeCard.type) && (
+                        <span>{activeCard.grammarClass || activeCard.type}</span>
+                      )}
                       <span>caixa {activeCard.box}</span>
                       {activeCard.repetitions > 0 && <span>{activeCard.repetitions}× revisada</span>}
                     </div>
@@ -1192,9 +1218,15 @@ export default function App() {
                     <h2 className="expression">{activeCard.text}</h2>
                     {activeCard.ipa && <p className="ipa">{activeCard.ipa}</p>}
 
-                    <div className="listen-row">
+                    {showOriginal && (
+                      <p className="original">
+                        capturado de: <em>“{activeCard.original}”</em>
+                      </p>
+                    )}
+
+                    <div className="listen-row front-listen">
                       <button
-                        className="listen"
+                        className="listen xl"
                         onClick={(event) => {
                           event.stopPropagation()
                           speak(activeCard.text, activeLanguage)
@@ -1204,22 +1236,16 @@ export default function App() {
                       </button>
                       {showOriginal && (
                         <button
-                          className="listen ghost"
+                          className="listen ghost xl"
                           onClick={(event) => {
                             event.stopPropagation()
                             speak(activeCard.original, activeLanguage)
                           }}
                         >
-                          💬 Frase original
+                          💬 Frase
                         </button>
                       )}
                     </div>
-
-                    {showOriginal && (
-                      <p className="original">
-                        capturado de: <em>“{activeCard.original}”</em>
-                      </p>
-                    )}
 
                     <p className="flip-hint">toque para virar</p>
                   </div>
@@ -1231,6 +1257,18 @@ export default function App() {
                       <p className="ipa-tip">
                         <span aria-hidden="true">🗣️</span> {activeCard.ipaComment}
                       </p>
+                    )}
+
+                    {(activeCard.conjugations?.length ?? 0) > 0 && (
+                      <button
+                        className="conj-button"
+                        onClick={(event) => {
+                          event.stopPropagation()
+                          setConjugationCard(activeCard)
+                        }}
+                      >
+                        📖 Conjugação{activeCard.verbType ? ` · ${activeCard.verbType}` : ''}
+                      </button>
                     )}
 
                     {activeCard.examples.length > 0 && (
@@ -1312,6 +1350,56 @@ export default function App() {
             </div>
           )}
         </section>
+      )}
+
+      {conjugationCard && (
+        <div className="sheet-backdrop" onClick={() => setConjugationCard(null)}>
+          <div
+            className="word-sheet conj-sheet"
+            role="dialog"
+            aria-label={`Conjugação: ${conjugationCard.text}`}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="word-sheet-head">
+              <div>
+                <strong className="word-term">{conjugationCard.text}</strong>
+                {conjugationCard.verbType && <p className="conj-type">{conjugationCard.verbType}</p>}
+              </div>
+              <div className="word-sheet-actions">
+                <button
+                  className="listen"
+                  onClick={() => speak(conjugationCard.text, detectLanguage(conjugationCard))}
+                >
+                  🔊
+                </button>
+                <button className="word-close" aria-label="Fechar" onClick={() => setConjugationCard(null)}>
+                  ✕
+                </button>
+              </div>
+            </div>
+
+            {(conjugationCard.conjugations ?? []).map((tense) => {
+              const frLines = tense.fr.split('\n').map((line) => line.trim()).filter(Boolean)
+              const ptLines = tense.pt.split('\n').map((line) => line.trim())
+              return (
+                <div className="tense" key={tense.tense}>
+                  <h4>{tense.tense}</h4>
+                  {frLines.map((line, index) => (
+                    <button
+                      className="conj-row"
+                      key={index}
+                      onClick={() => speak(line, detectLanguage(conjugationCard))}
+                    >
+                      <span className="conj-fr">{line}</span>
+                      <span className="conj-pt">{ptLines[index] || ''}</span>
+                    </button>
+                  ))}
+                </div>
+              )
+            })}
+            <p className="conj-hint">toque numa forma para ouvi-la</p>
+          </div>
+        </div>
       )}
 
       {picked && (
