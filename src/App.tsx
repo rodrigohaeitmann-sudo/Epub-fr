@@ -18,6 +18,8 @@ type Card = {
   grammarClass?: string
   verbType?: string
   conjugations?: Conjugation[]
+  source?: CardSource
+  theme?: string
   box: number
   repetitions: number
   hardCount: number
@@ -26,16 +28,18 @@ type Card = {
   nextReview: string
 }
 
-type PendingReview = { id: string; text: string; result: ReviewResult; at: string }
+type CardSource = 'words' | 'phrases'
+type PendingReview = { id: string; text: string; result: ReviewResult; at: string; target?: CardSource }
 type SessionEntry = { id: string; text: string; translation: string; language: string; result: ReviewResult }
 type SessionRecord = { at: string; entries: SessionEntry[]; mode?: string }
 
-type StudyMode = 'suggested' | 'review' | 'new' | 'practice'
+type StudyMode = 'suggested' | 'review' | 'new' | 'phrases' | 'practice'
 
 const MODE_LABEL: Record<StudyMode, string> = {
   suggested: 'Estudo sugerido',
   review: 'Revisão',
   new: 'Novas',
+  phrases: 'Frases',
   practice: 'Prática',
 }
 
@@ -45,6 +49,9 @@ const SUGGESTED_REVIEW_SHARE = 5
 const SCRIPT_URL_KEY = 'reviewScriptUrl'
 const PENDING_KEY = 'reviewPendingQueue'
 const CARDS_CACHE_KEY = 'reviewCardsCache'
+const PHRASES_URL_KEY = 'phrasesScriptUrl'
+const PHRASES_CACHE_KEY = 'reviewPhrasesCache'
+const THEMES_KEY = 'phraseThemes'
 const SESSIONS_KEY = 'reviewSessions'
 const MAX_SESSIONS = 30
 
@@ -302,11 +309,15 @@ const DEMO_CARDS: Card[] = [
 export default function App() {
   const [scriptUrl, setScriptUrl] = useState(() => localStorage.getItem(SCRIPT_URL_KEY) || '')
   const [draftUrl, setDraftUrl] = useState(scriptUrl)
+  const [phrasesUrl, setPhrasesUrl] = useState(() => localStorage.getItem(PHRASES_URL_KEY) || '')
+  const [draftPhrasesUrl, setDraftPhrasesUrl] = useState(phrasesUrl)
   const [theme, setTheme] = useState<'light' | 'dark'>(() => initialTheme())
   const [status, setStatus] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle')
   const [errorMessage, setErrorMessage] = useState('')
 
   const [cards, setCards] = useState<Card[]>([])
+  const [phrases, setPhrases] = useState<Card[]>([])
+  const [selectedThemes, setSelectedThemes] = useState<string[]>(() => readJson<string[]>(THEMES_KEY, []))
   const [queue, setQueue] = useState<string[]>([])
   const [screen, setScreen] = useState<'home' | 'study' | 'stats' | 'settings'>(scriptUrl ? 'home' : 'settings')
   const [mode, setMode] = useState<StudyMode | null>(null)
@@ -330,52 +341,87 @@ export default function App() {
 
   const flushing = useRef(false)
   const cardsRef = useRef<Card[]>([])
+  const phrasesRef = useRef<Card[]>([])
   const prevQueueLength = useRef(0)
   // Cards já reapresentados neste bloco por "pouco tempo": cada um volta uma única vez.
   const requeuedIds = useRef<Set<string>>(new Set())
   const searchInputRef = useRef<HTMLInputElement>(null)
 
-  const cardsById = useMemo(() => new Map(cards.map((card) => [card.id, card])), [cards])
+  const allCards = useMemo(() => [...cards, ...phrases], [cards, phrases])
+  const cardsById = useMemo(() => new Map(allCards.map((card) => [card.id, card])), [allCards])
   const isDemo = !scriptUrl
 
-  const flushPending = useCallback(async (url: string) => {
-    if (flushing.current || !url) return
+  // Envia a fila pendente, separando por backend (palavras x frases).
+  const flushPending = useCallback(async (wordsUrl: string, phrUrl: string) => {
+    if (flushing.current) return
     const pending = loadPending()
     if (!pending.length) return
     flushing.current = true
     try {
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: JSON.stringify({ action: 'reviewBatch', reviews: pending }),
-      })
-      const data = await response.json()
-      if (data.ok) {
-        savePending([])
-        setPendingCount(0)
+      const remaining: PendingReview[] = []
+      const groups: Array<[string, PendingReview[]]> = [
+        [wordsUrl, pending.filter((item) => (item.target ?? 'words') === 'words')],
+        [phrUrl, pending.filter((item) => item.target === 'phrases')],
+      ]
+      for (const [url, reviews] of groups) {
+        if (!reviews.length) continue
+        if (!url) {
+          remaining.push(...reviews)
+          continue
+        }
+        try {
+          const response = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+            body: JSON.stringify({ action: 'reviewBatch', reviews }),
+          })
+          const data = await response.json()
+          if (!data.ok) remaining.push(...reviews)
+        } catch {
+          remaining.push(...reviews)
+        }
       }
-    } catch {
-      // continua na fila local; tentaremos de novo depois
+      savePending(remaining)
+      setPendingCount(remaining.length)
     } finally {
       flushing.current = false
     }
   }, [])
 
   const loadCards = useCallback(
-    async (url: string) => {
+    async (url: string, phrUrl: string) => {
       if (!url) {
         setCards(DEMO_CARDS)
+        setPhrases([])
         setStatus('ready')
         return
       }
       setStatus('loading')
       setErrorMessage('')
+      await flushPending(url, phrUrl)
+
+      // Frases (planilha independente): falha aqui não derruba o app.
+      if (phrUrl) {
+        try {
+          const response = await fetch(`${phrUrl}${phrUrl.includes('?') ? '&' : '?'}action=cards`)
+          const data = await response.json()
+          if (!data.ok) throw new Error(data.error || 'Resposta inválida do script de frases.')
+          const tagged = (data.cards as Card[]).map((card) => ({ ...card, source: 'phrases' as const }))
+          setPhrases(applyPending(tagged, loadPending()))
+        } catch {
+          const cached = readJson<{ at: string; cards: Card[] } | null>(PHRASES_CACHE_KEY, null)
+          if (cached && cached.cards.length) setPhrases(cached.cards)
+        }
+      } else {
+        setPhrases([])
+      }
+
       try {
-        await flushPending(url)
         const response = await fetch(`${url}${url.includes('?') ? '&' : '?'}action=cards`)
         const data = await response.json()
         if (!data.ok) throw new Error(data.error || 'Resposta inválida do script.')
-        setCards(applyPending(data.cards as Card[], loadPending()))
+        const tagged = (data.cards as Card[]).map((card) => ({ ...card, source: 'words' as const }))
+        setCards(applyPending(tagged, loadPending()))
         setFromCache(false)
         setStatus('ready')
       } catch (error) {
@@ -384,7 +430,7 @@ export default function App() {
         if (cached && cached.cards.length) {
           setCards(cached.cards)
           setFromCache(true)
-            setStatus('ready')
+          setStatus('ready')
         } else {
           setStatus('error')
           setErrorMessage(error instanceof Error ? error.message : String(error))
@@ -395,8 +441,8 @@ export default function App() {
   )
 
   useEffect(() => {
-    loadCards(scriptUrl)
-  }, [scriptUrl, loadCards])
+    loadCards(scriptUrl, phrasesUrl)
+  }, [scriptUrl, phrasesUrl, loadCards])
 
   // Aplica o tema (claro/noturno) e persiste a preferência (chave revfr-theme).
   useEffect(() => {
@@ -410,6 +456,23 @@ export default function App() {
   useEffect(() => {
     cardsRef.current = cards
   }, [cards])
+
+  useEffect(() => {
+    phrasesRef.current = phrases
+  }, [phrases])
+
+  useEffect(() => {
+    localStorage.setItem(THEMES_KEY, JSON.stringify(selectedThemes))
+  }, [selectedThemes])
+
+  useEffect(() => {
+    if (!phrases.length) return
+    try {
+      localStorage.setItem(PHRASES_CACHE_KEY, JSON.stringify({ at: new Date().toISOString(), cards: phrases }))
+    } catch {
+      // sem espaço no storage
+    }
+  }, [phrases])
 
   // Guarda a cópia local dos cards (com o progresso já aplicado) para uso offline.
   useEffect(() => {
@@ -425,7 +488,7 @@ export default function App() {
   useEffect(() => {
     const onOnline = () => {
       setIsOnline(true)
-      flushPending(scriptUrl)
+      flushPending(scriptUrl, phrasesUrl)
     }
     const onOffline = () => setIsOnline(false)
     window.addEventListener('online', onOnline)
@@ -434,17 +497,17 @@ export default function App() {
       window.removeEventListener('online', onOnline)
       window.removeEventListener('offline', onOffline)
     }
-  }, [scriptUrl, flushPending])
+  }, [scriptUrl, phrasesUrl, flushPending])
 
   // Retentativa periódica: cobre o caso em que o evento "online" chega
   // enquanto uma tentativa de sync ainda está falhando.
   useEffect(() => {
     if (!pendingCount || isDemo) return
     const timer = window.setInterval(() => {
-      if (navigator.onLine) flushPending(scriptUrl)
+      if (navigator.onLine) flushPending(scriptUrl, phrasesUrl)
     }, 15000)
     return () => window.clearInterval(timer)
-  }, [pendingCount, isDemo, scriptUrl, flushPending])
+  }, [pendingCount, isDemo, scriptUrl, phrasesUrl, flushPending])
 
   // Fim de bloco: salva o resumo no histórico local e o exibe no card de conclusão.
   useEffect(() => {
@@ -491,12 +554,32 @@ export default function App() {
     }
   }, [cards, languageFilter])
 
+  // Pools das frases (planilha independente): temas = abas; filtro por tema.
+  const phrasePools = useMemo(() => {
+    const today = todayKey()
+    const themes = Array.from(new Set(phrases.map((card) => card.theme || 'Frases')))
+    const eligible = phrases.filter(
+      (card) => !selectedThemes.length || selectedThemes.includes(card.theme || 'Frases'),
+    )
+    const seen = eligible.filter((card) => !!card.nextReview)
+    const reviewable = seen.filter((card) => !(card.lastReviewedAt === today && card.nextReview > today))
+    return {
+      themes,
+      total: eligible.length,
+      due: seen.filter((card) => card.nextReview <= today).length,
+      fresh: eligible.filter((card) => !card.nextReview).length,
+      reviewable: reviewable.length,
+    }
+  }, [phrases, selectedThemes])
+
   /**
    * Monta o bloco de estudo conforme o modo:
    * - suggested: 5 revisões (na ordem de prioridade) + 5 novas aleatórias,
    *   completando de um lado quando falta do outro, até 10;
    * - review: 10 já vistas, difíceis e mais próximas da revisão primeiro;
-   * - new: 10 ainda não respondidas, em ordem aleatória.
+   * - new: 10 ainda não respondidas, em ordem aleatória;
+   * - phrases: 10 frases dos temas escolhidos — vencidas primeiro (ordem de
+   *   prioridade), completando com novas aleatórias.
    */
   function startStudy(nextMode: StudyMode, singleId?: string) {
     const today = todayKey()
@@ -514,6 +597,16 @@ export default function App() {
     if (nextMode === 'practice' && singleId) {
       const card = cardsById.get(singleId)
       block = card ? [card] : []
+    } else if (nextMode === 'phrases') {
+      const pool = phrasesRef.current.filter(
+        (card) => !selectedThemes.length || selectedThemes.includes(card.theme || 'Frases'),
+      )
+      const reviewablePhrases = pool.filter(
+        (card) => !!card.nextReview && !(card.lastReviewedAt === today && card.nextReview > today),
+      )
+      const orderedPhrases = reviewOrder(reviewablePhrases, today)
+      const freshPhrases = shuffle(pool.filter((card) => !card.nextReview))
+      block = [...orderedPhrases.slice(0, BLOCK_SIZE), ...freshPhrases].slice(0, BLOCK_SIZE)
     } else if (nextMode === 'review') {
       block = ordered.slice(0, BLOCK_SIZE)
     } else if (nextMode === 'new') {
@@ -569,7 +662,7 @@ export default function App() {
     const loose = query.length >= 3
     const direct: Card[] = []
     const mentions: Card[] = []
-    for (const card of cards) {
+    for (const card of allCards) {
       const text = normalize(card.text)
       if (text === query || (loose && (text.includes(query) || query.includes(text)))) {
         direct.push(card)
@@ -579,12 +672,12 @@ export default function App() {
     }
     direct.sort((a, b) => Number(normalize(b.text) === query) - Number(normalize(a.text) === query))
     return { direct: direct.slice(0, 3), mentions: mentions.slice(0, 3) }
-  }, [picked, cards])
+  }, [picked, allCards])
 
   const searchResults = useMemo(() => {
     const query = normalize(searchQuery.trim())
     if (!query) return []
-    return cards
+    return allCards
       .filter((card) => {
         const haystack = normalize(
           [
@@ -597,18 +690,24 @@ export default function App() {
         return haystack.includes(query)
       })
       .slice(0, 40)
-  }, [cards, searchQuery])
+  }, [allCards, searchQuery])
 
   const sendReview = useCallback(
     (card: Card, result: ReviewResult) => {
       if (isDemo) return
-      const review: PendingReview = { id: card.id, text: card.text, result, at: new Date().toISOString() }
+      const review: PendingReview = {
+        id: card.id,
+        text: card.text,
+        result,
+        at: new Date().toISOString(),
+        target: card.source === 'phrases' ? 'phrases' : 'words',
+      }
       const pending = [...loadPending(), review]
       savePending(pending)
       setPendingCount(pending.length)
-      flushPending(scriptUrl)
+      flushPending(scriptUrl, phrasesUrl)
     },
-    [isDemo, scriptUrl, flushPending],
+    [isDemo, scriptUrl, phrasesUrl, flushPending],
   )
 
   const answer = useCallback(
@@ -618,7 +717,7 @@ export default function App() {
       const nextReview = addDaysKey(next.days)
 
       sendReview(activeCard, result)
-      setCards((current) =>
+      const applyProgress = (current: Card[]) =>
         current.map((card) =>
           card.id === activeCard.id
             ? {
@@ -631,8 +730,9 @@ export default function App() {
                 nextReview,
               }
             : card,
-        ),
-      )
+        )
+      if (activeCard.source === 'phrases') setPhrases(applyProgress)
+      else setCards(applyProgress)
       setSessionEntries((current) => {
         const entry: SessionEntry = {
           id: activeCard.id,
@@ -707,8 +807,11 @@ export default function App() {
 
   function saveSettings() {
     const trimmed = draftUrl.trim()
+    const trimmedPhrases = draftPhrasesUrl.trim()
     localStorage.setItem(SCRIPT_URL_KEY, trimmed)
+    localStorage.setItem(PHRASES_URL_KEY, trimmedPhrases)
     setScriptUrl(trimmed)
+    setPhrasesUrl(trimmedPhrases)
     if (trimmed) setScreen('home')
   }
 
@@ -889,7 +992,7 @@ export default function App() {
         </div>
 
         <div className="setting-block">
-          <label htmlFor="script-url">URL do App da Web (Apps Script)</label>
+          <label htmlFor="script-url">URL do App da Web — Palavras (Apps Script)</label>
           <div className="settings-row">
             <input
               id="script-url"
@@ -900,9 +1003,27 @@ export default function App() {
             <button onClick={saveSettings}>Salvar</button>
           </div>
           <small>
-            Na planilha: Extensões → Apps Script → cole o código de <code>apps-script/Code.gs</code> → Implantar →
+            Na planilha de vocabulário: Extensões → Apps Script → cole <code>apps-script/Code.gs</code> → Implantar →
             App da Web (executar como você, acesso: qualquer pessoa com o link) → copie a URL <code>/exec</code>.
             O progresso é gravado na aba <strong>Progresso</strong>; a aba de palavras nunca é alterada.
+          </small>
+        </div>
+
+        <div className="setting-block">
+          <label htmlFor="phrases-url">URL do App da Web — Frases (opcional)</label>
+          <div className="settings-row">
+            <input
+              id="phrases-url"
+              placeholder="https://script.google.com/macros/s/.../exec"
+              value={draftPhrasesUrl}
+              onChange={(event) => setDraftPhrasesUrl(event.target.value)}
+            />
+            <button onClick={saveSettings}>Salvar</button>
+          </div>
+          <small>
+            Na planilha de frases (independente): cole <code>apps-script/Frases.gs</code> e publique da mesma forma.
+            Cada aba vira um tema (o "Guia de pronúncia" é ignorado); o progresso vai para a aba{' '}
+            <strong>Progresso</strong> dela.
           </small>
         </div>
       </div>
@@ -1058,7 +1179,11 @@ export default function App() {
               {label}
             </button>
           ))}
-          <button className="refresh" onClick={() => loadCards(scriptUrl)} disabled={status === 'loading'}>
+          <button
+            className="refresh"
+            onClick={() => loadCards(scriptUrl, phrasesUrl)}
+            disabled={status === 'loading'}
+          >
             {status === 'loading' ? 'Carregando…' : '↻ Recarregar'}
           </button>
         </div>
@@ -1170,6 +1295,47 @@ export default function App() {
                 </button>
               </div>
 
+              {phrases.length > 0 && (
+                <>
+                  <p className="section-label">Frases por tema</p>
+                  <div className="theme-chips">
+                    {phrasePools.themes.map((themeName) => (
+                      <button
+                        key={themeName}
+                        className={selectedThemes.includes(themeName) ? 'active' : ''}
+                        onClick={() =>
+                          setSelectedThemes((current) =>
+                            current.includes(themeName)
+                              ? current.filter((item) => item !== themeName)
+                              : [...current, themeName],
+                          )
+                        }
+                      >
+                        {themeName}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="mode-grid">
+                    <button
+                      className="mode-card phrases"
+                      disabled={phrasePools.reviewable + phrasePools.fresh === 0}
+                      onClick={() => startStudy('phrases')}
+                    >
+                      <span className="mode-icon" aria-hidden="true">💬</span>
+                      <strong>Frases</strong>
+                      <span className="mode-desc">
+                        10 frases {selectedThemes.length ? 'dos temas escolhidos' : 'de todos os temas'}
+                      </span>
+                      <small>
+                        {phrasePools.reviewable + phrasePools.fresh === 0 && phrasePools.total > 0
+                          ? 'todas revisadas por hoje 🎉'
+                          : `${phrasePools.due} vencida${phrasePools.due === 1 ? '' : 's'} hoje · ${phrasePools.fresh} novas · ${phrasePools.total} no total`}
+                      </small>
+                    </button>
+                  </div>
+                </>
+              )}
+
               {sessions.length > 0 && (
                 <div className="history">
                   <h3>Blocos de estudo já feitos</h3>
@@ -1208,8 +1374,12 @@ export default function App() {
                   <div className="face front">
                     <div className="card-meta">
                       <span className="lang">{activeLanguage === 'fr-FR' ? '🇫🇷 Francês' : '🇬🇧 Inglês'}</span>
-                      {(activeCard.grammarClass || activeCard.type) && (
-                        <span>{activeCard.grammarClass || activeCard.type}</span>
+                      {activeCard.theme ? (
+                        <span>{activeCard.theme}</span>
+                      ) : (
+                        (activeCard.grammarClass || activeCard.type) && (
+                          <span>{activeCard.grammarClass || activeCard.type}</span>
+                        )
                       )}
                       <span>caixa {activeCard.box}</span>
                       {activeCard.repetitions > 0 && <span>{activeCard.repetitions}× revisada</span>}
@@ -1252,6 +1422,32 @@ export default function App() {
 
                   <div className="face back">
                     <p className="translation">{activeCard.translation || 'Sem tradução na planilha.'}</p>
+
+                    {activeCard.source === 'phrases' && (
+                      <div className="examples">
+                        <div className="example">
+                          <div className="example-line">
+                            <p
+                              className="example-text selectable"
+                              onMouseUp={() => handleTextSelection(activeLanguage)}
+                              onTouchEnd={() => handleTextSelection(activeLanguage)}
+                            >
+                              <SelectableText text={activeCard.text} term="" language={activeLanguage} onPick={pick} />
+                            </p>
+                            <button
+                              className="mini-listen"
+                              aria-label="Ouvir frase"
+                              onClick={(event) => {
+                                event.stopPropagation()
+                                speak(activeCard.text, activeLanguage)
+                              }}
+                            >
+                              🔊
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    )}
 
                     {activeCard.ipaComment && (
                       <p className="ipa-tip">
@@ -1477,7 +1673,9 @@ export default function App() {
 
       {!studying && (
         <footer className="foot">
-          <span>{cards.length} itens na planilha</span>
+          <span>
+            {cards.length} palavras{phrases.length > 0 ? ` · ${phrases.length} frases` : ''}
+          </span>
           <span>atalhos: espaço vira · P ouve · 1 / 2 / 3 respondem</span>
         </footer>
       )}

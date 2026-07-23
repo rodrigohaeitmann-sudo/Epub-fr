@@ -1,4 +1,21 @@
-# Backend na planilha (Google Apps Script)
+# Backends nas planilhas (Google Apps Script)
+
+Este diretório tem **dois scripts independentes**:
+
+| Script | Planilha | Uso no app |
+| --- | --- | --- |
+| [`Code.gs`](Code.gs) | vocabulário (palavras/expressões) | campo "URL — Palavras" em Ajustes |
+| [`Frases.gs`](Frases.gs) | frases por tema (planilha separada) | campo "URL — Frases" em Ajustes |
+
+No script de **frases**, cada aba da planilha é um tema (o nome da aba aparece
+como filtro no app); as abas "Progresso" e as que contenham "guia"/"pronúncia"
+no nome são ignoradas. Cada aba tem uma frase por linha: coluna do francês e
+coluna da tradução (achadas pelo cabeçalho — ex.: `Frase`/`Francês` e
+`Tradução`/`Português`, com `Dica`/`Pronúncia` opcional — ou, sem cabeçalho,
+A = francês e B = tradução). A instalação é idêntica à do script de palavras
+(abaixo), só que na planilha de frases e colando `Frases.gs`.
+
+# Backend de palavras (Code.gs)
 
 O app lê as palavras/expressões da **primeira aba** da sua planilha e grava o
 progresso da revisão na aba **`Progresso`** (criada automaticamente). A aba de

@@ -111,6 +111,17 @@ button { cursor: pointer; background: none; border: 0; touch-action: manipulatio
 
 /* ---------------------------------------------------------------- filtros */
 .filters { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.theme-chips { display: flex; gap: 8px; flex-wrap: wrap; }
+.theme-chips button {
+  padding: 7px 13px;
+  border-radius: 99px;
+  background: var(--track);
+  color: var(--sub);
+  font-weight: 600;
+  font-size: 13px;
+  border: 1px solid transparent;
+}
+.theme-chips button.active { background: var(--accent-soft); color: var(--accent-strong); border-color: var(--accent-soft2); }
 .filters button {
   padding: 8px 14px;
   border-radius: 99px;
