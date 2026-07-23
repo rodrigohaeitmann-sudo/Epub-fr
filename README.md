@@ -46,6 +46,11 @@ volta (evento `online` + retentativa periódica).
   cada exemplo, com voz em inglês ou francês definida pela coluna `Língua`.
 - Filtro por idioma, IPA quando disponível, e "capturado de…" mostrando a
   frase original quando difere da expressão.
+- **Frases por tema**: uma segunda planilha (independente, com
+  `apps-script/Frases.gs`) alimenta blocos de 10 frases — cada aba é um tema,
+  escolhido por chips no menu; francês na frente (falado automaticamente),
+  tradução no verso, mesma avaliação e agendamento das palavras, com progresso
+  gravado na aba `Progresso` da planilha de frases.
 - **Blocos já feitos**: o menu inicial lista o histórico de blocos (modo, data
   e nº de cards); cada bloco expande para mostrar o resultado por expressão
   (difícil/padrão/fácil), e cada expressão reabre a ficha completa.
