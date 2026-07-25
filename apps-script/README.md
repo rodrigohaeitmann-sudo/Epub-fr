@@ -75,9 +75,34 @@ URL `/exec` continua a mesma).
   `id, text, original, language, type, ipa, ipaComment, translation,
   examples: [{ text, translation }], box, repetitions, nextReview, ...`.
 - `GET ?action=ping` → `{ ok: true, version }`.
+- `GET ?action=translate&from=fr&to=pt&q=...` → `{ ok, translation }` — usado
+  quando você toca numa palavra solta que não está na planilha.
+- `GET ?action=examples&lang=fr&q=...&avoid=...` → `{ ok, examples: [...] }` —
+  frases novas geradas pelo botão "✨ Mais exemplos" (ver abaixo).
 - `POST` (Content-Type `text/plain`, corpo JSON):
   - `{ "action": "review", "id": "...", "text": "...", "result": "short" | "standard" | "long" }`
   - `{ "action": "reviewBatch", "reviews": [ ... ] }` — usado pela fila offline do app.
 
 Agendamento (Leitner): intervalos por caixa `[1, 3, 7, 16, 35, 70, 140]` dias.
 `standard` sobe 1 caixa, `long` sobe 2, `short` desce 1 e volta amanhã.
+
+## Exemplos gerados por IA (opcional)
+
+No verso de cada card há o botão **✨ Mais exemplos**. Ele funciona em duas
+etapas:
+
+1. **Do seu próprio acervo** — procura a palavra nos exemplos dos outros cards
+   e nas frases da planilha de frases. Isso roda no aparelho e **funciona
+   offline**, sem configurar nada.
+2. **Geradas na hora** — quando o acervo acaba, o app chama
+   `?action=examples` neste script, que pede frases novas ao Gemini.
+
+A etapa 2 só liga se você guardar uma chave:
+
+1. Pegue uma chave em <https://aistudio.google.com/apikey>.
+2. No editor do Apps Script: **⚙️ Configurações do projeto → Propriedades do
+   script → Adicionar propriedade** — nome `GEMINI_API_KEY`, valor a chave.
+3. Reimplante (**Gerenciar implantações → ✏️ → Nova versão**).
+
+Sem a chave, o app avisa "configure GEMINI_API_KEY no Apps Script para gerar
+frases" e segue usando só os exemplos da planilha e do acervo.

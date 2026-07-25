@@ -42,6 +42,12 @@ volta (evento `online` + retentativa periódica).
 - Verso rico: tradução em destaque, **dica de pronúncia** (Comentário IPA) e
   até 3 **exemplos de uso**, cada um com a expressão destacada, tradução em
   português e botão de áudio próprio.
+- **✨ Mais exemplos**: os 3 exemplos da planilha continuam abrindo de saída, e
+  o botão traz frases inéditas a cada toque — primeiro do seu próprio acervo
+  (outros cards e a planilha de frases que usam a palavra, o que **funciona
+  offline**) e, quando ele acaba, geradas na hora pelo Apps Script (requer
+  `GEMINI_API_KEY`, veja [apps-script/README.md](apps-script/README.md)).
+  Assim cada novo contato com a palavra mostra exemplos diferentes.
 - Áudio via Web Speech API: pronúncia da expressão, da frase original e de
   cada exemplo, com voz em inglês ou francês definida pela coluna `Língua`.
 - Filtro por idioma, IPA quando disponível, e "capturado de…" mostrando a
@@ -55,8 +61,11 @@ volta (evento `online` + retentativa periódica).
   *novas* (10 inéditas).
 - **Consulta de trecho**: tocar numa palavra/frase mostra a tradução e a
   pronúncia em IPA — do card quando a palavra está na planilha, senão tradução
-  automática (cacheada para uso offline) e IPA aproximado gerado por regras
-  (`src/ipa.ts`).
+  automática e IPA aproximado gerado por regras (`src/ipa.ts`). A tradução
+  tenta o Apps Script e, se ele ainda não foi republicado (ou falhar), um
+  tradutor público; o resultado fica em cache para repetir offline. Quando
+  nada funciona, o app diz **por quê** (sem internet / republique o script /
+  não encontrada) em vez de um aviso genérico.
 - **Minhas coleções**: salve qualquer palavra ou frase (botão ☆, no verso do
   card ou na ficha) em coleções suas — "Trabalho", "Viagem", o que fizer
   sentido. Cada coleção vira um bloco no menu e pode ser revisada **a qualquer
