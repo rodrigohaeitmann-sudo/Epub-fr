@@ -35,6 +35,7 @@ function doGet(event) {
     const action = params.action || 'cards'
     if (action === 'ping') return json_({ ok: true, version: 1, kind: 'frases' })
     if (action === 'cards') return json_({ ok: true, today: dateKey_(new Date()), cards: getPhrases_() })
+    if (action === 'translate') return json_(translateText_(params))
     return json_({ ok: false, error: 'Ação desconhecida: ' + action })
   } catch (error) {
     return json_({ ok: false, error: String(error && error.message ? error.message : error) })
@@ -137,6 +138,22 @@ function detectLayout_(firstRow) {
     layout.pt = ptCol >= 0 ? ptCol : (frCol + 1 < firstRow.length ? frCol + 1 : -1)
   }
   return layout
+}
+
+/**
+ * Tradução sob demanda de um trecho selecionado no app (usa o serviço de
+ * tradução do próprio Apps Script). Não altera nenhuma planilha.
+ */
+function translateText_(params) {
+  const text = String(params.q || '').trim()
+  if (!text) return { ok: false, error: 'Envie o texto em q.' }
+  const source = String(params.from || 'fr')
+  const target = String(params.to || 'pt')
+  try {
+    return { ok: true, q: text, translation: LanguageApp.translate(text, source, target) }
+  } catch (error) {
+    return { ok: false, error: String(error && error.message ? error.message : error) }
+  }
 }
 
 // ---------------------------------------------------------------- escrita

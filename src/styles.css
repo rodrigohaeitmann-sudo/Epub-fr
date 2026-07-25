@@ -537,6 +537,28 @@ mark.pickable { background: var(--accent-soft); color: var(--accent-strong); pad
 .word-sheet-actions { display: flex; gap: 8px; align-items: center; flex-shrink: 0; }
 .word-close { border-radius: 99px; width: 36px; height: 36px; background: var(--track); color: var(--sub); font-weight: 700; }
 .word-none { margin: 0 0 12px; color: var(--faint); font-size: 13px; }
+
+.lookup-info {
+  margin: 0 0 14px;
+  padding: 12px 13px;
+  border-radius: 12px;
+  background: var(--accent-soft);
+}
+.lookup-translation { margin: 0; color: var(--accent-strong); font-size: 16px; font-weight: 700; line-height: 1.35; }
+.lookup-translation.empty, .lookup-translation.loading { color: var(--sub); font-size: 13px; font-weight: 600; }
+.lookup-ipa { margin: 6px 0 0; color: var(--sub); font-size: 14px; }
+.lookup-tag {
+  margin-left: 8px;
+  padding: 2px 7px;
+  border-radius: 99px;
+  background: var(--surface);
+  color: var(--faint);
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  vertical-align: middle;
+}
 .word-matches { margin: 0 0 12px; padding: 0; list-style: none; display: grid; gap: 6px; }
 .word-matches button {
   width: 100%;

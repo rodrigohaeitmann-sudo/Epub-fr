@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
+import { frenchIpa } from './ipa'
 
 type ReviewResult = 'short' | 'standard' | 'long'
 type Language = 'en-US' | 'fr-FR'
@@ -33,13 +34,15 @@ type PendingReview = { id: string; text: string; result: ReviewResult; at: strin
 type SessionEntry = { id: string; text: string; translation: string; language: string; result: ReviewResult }
 type SessionRecord = { at: string; entries: SessionEntry[]; mode?: string }
 
-type StudyMode = 'suggested' | 'review' | 'new' | 'phrases' | 'practice'
+type StudyMode = 'suggested' | 'review' | 'new' | 'phrases' | 'phrasesReview' | 'phrasesNew' | 'practice'
 
 const MODE_LABEL: Record<StudyMode, string> = {
   suggested: 'Estudo sugerido',
   review: 'Revisão',
   new: 'Novas',
-  phrases: 'Frases',
+  phrases: 'Frases sugeridas',
+  phrasesReview: 'Frases · revisão',
+  phrasesNew: 'Frases · novas',
   practice: 'Prática',
 }
 
@@ -52,6 +55,7 @@ const CARDS_CACHE_KEY = 'reviewCardsCache'
 const PHRASES_URL_KEY = 'phrasesScriptUrl'
 const PHRASES_CACHE_KEY = 'reviewPhrasesCache'
 const THEMES_KEY = 'phraseThemes'
+const TRANSLATION_CACHE_KEY = 'lookupTranslations'
 const SESSIONS_KEY = 'reviewSessions'
 const MAX_SESSIONS = 30
 
@@ -333,6 +337,11 @@ export default function App() {
   const [browseId, setBrowseId] = useState<string | null>(null)
   const [picked, setPicked] = useState<{ term: string; language: Language } | null>(null)
   const [conjugationCard, setConjugationCard] = useState<Card | null>(null)
+  const [lookup, setLookup] = useState<{ translation: string; source: 'card' | 'online' | 'none'; loading: boolean }>({
+    translation: '',
+    source: 'none',
+    loading: false,
+  })
 
   const [sessionEntries, setSessionEntries] = useState<SessionEntry[]>([])
   const [sessions, setSessions] = useState<SessionRecord[]>(() => loadSessions())
@@ -597,7 +606,7 @@ export default function App() {
     if (nextMode === 'practice' && singleId) {
       const card = cardsById.get(singleId)
       block = card ? [card] : []
-    } else if (nextMode === 'phrases') {
+    } else if (nextMode === 'phrases' || nextMode === 'phrasesReview' || nextMode === 'phrasesNew') {
       const pool = phrasesRef.current.filter(
         (card) => !selectedThemes.length || selectedThemes.includes(card.theme || 'Frases'),
       )
@@ -606,7 +615,20 @@ export default function App() {
       )
       const orderedPhrases = reviewOrder(reviewablePhrases, today)
       const freshPhrases = shuffle(pool.filter((card) => !card.nextReview))
-      block = [...orderedPhrases.slice(0, BLOCK_SIZE), ...freshPhrases].slice(0, BLOCK_SIZE)
+
+      if (nextMode === 'phrasesReview') {
+        block = orderedPhrases.slice(0, BLOCK_SIZE)
+      } else if (nextMode === 'phrasesNew') {
+        block = freshPhrases.slice(0, BLOCK_SIZE)
+      } else {
+        const reviews = orderedPhrases.slice(0, SUGGESTED_REVIEW_SHARE)
+        const news = freshPhrases.slice(0, BLOCK_SIZE - reviews.length)
+        block = [...reviews, ...news]
+        if (block.length < BLOCK_SIZE && reviews.length < orderedPhrases.length) {
+          block = [...orderedPhrases.slice(0, BLOCK_SIZE - news.length), ...news]
+        }
+        block = block.slice(0, BLOCK_SIZE)
+      }
     } else if (nextMode === 'review') {
       block = ordered.slice(0, BLOCK_SIZE)
     } else if (nextMode === 'new') {
@@ -673,6 +695,76 @@ export default function App() {
     direct.sort((a, b) => Number(normalize(b.text) === query) - Number(normalize(a.text) === query))
     return { direct: direct.slice(0, 3), mentions: mentions.slice(0, 3) }
   }, [picked, allCards])
+
+  // IPA do trecho tocado: usa o da planilha quando a palavra é um card,
+  // senão gera uma transcrição aproximada (só para francês).
+  const pickedIpa = useMemo(() => {
+    if (!picked) return { value: '', approximate: false }
+    const exact = pickedMatches.direct.find(
+      (card) => normalize(card.text) === normalize(picked.term) && card.ipa,
+    )
+    if (exact) return { value: exact.ipa, approximate: false }
+    if (picked.language === 'fr-FR') {
+      const generated = frenchIpa(picked.term)
+      if (generated) return { value: generated, approximate: true }
+    }
+    return { value: '', approximate: false }
+  }, [picked, pickedMatches])
+
+  // Tradução do trecho tocado: card exato → cache local → serviço do Apps
+  // Script (online). O resultado fica em cache para funcionar offline depois.
+  useEffect(() => {
+    if (!picked) {
+      setLookup({ translation: '', source: 'none', loading: false })
+      return
+    }
+    const term = picked.term
+    const key = `${picked.language}|${normalize(term)}`
+
+    const exact = pickedMatches.direct.find((card) => normalize(card.text) === normalize(term))
+    if (exact?.translation) {
+      setLookup({ translation: exact.translation, source: 'card', loading: false })
+      return
+    }
+
+    const cache = readJson<Record<string, string>>(TRANSLATION_CACHE_KEY, {})
+    if (cache[key]) {
+      setLookup({ translation: cache[key], source: 'online', loading: false })
+      return
+    }
+
+    const url = scriptUrl || phrasesUrl
+    if (!url || !navigator.onLine) {
+      setLookup({ translation: '', source: 'none', loading: false })
+      return
+    }
+
+    let cancelled = false
+    setLookup({ translation: '', source: 'none', loading: true })
+    const from = picked.language === 'fr-FR' ? 'fr' : 'en'
+    fetch(`${url}${url.includes('?') ? '&' : '?'}action=translate&from=${from}&to=pt&q=${encodeURIComponent(term)}`)
+      .then((response) => response.json())
+      .then((data) => {
+        if (cancelled) return
+        if (data.ok && data.translation) {
+          const updated = { ...readJson<Record<string, string>>(TRANSLATION_CACHE_KEY, {}), [key]: data.translation }
+          try {
+            localStorage.setItem(TRANSLATION_CACHE_KEY, JSON.stringify(updated))
+          } catch {
+            // storage cheio: segue sem cache
+          }
+          setLookup({ translation: data.translation, source: 'online', loading: false })
+        } else {
+          setLookup({ translation: '', source: 'none', loading: false })
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setLookup({ translation: '', source: 'none', loading: false })
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [picked, pickedMatches, scriptUrl, phrasesUrl])
 
   const searchResults = useMemo(() => {
     const query = normalize(searchQuery.trim())
@@ -1322,15 +1414,37 @@ export default function App() {
                       onClick={() => startStudy('phrases')}
                     >
                       <span className="mode-icon" aria-hidden="true">💬</span>
-                      <strong>Frases</strong>
-                      <span className="mode-desc">
-                        10 frases {selectedThemes.length ? 'dos temas escolhidos' : 'de todos os temas'}
-                      </span>
+                      <strong>Frases sugeridas</strong>
+                      <span className="mode-desc">5 revisões + 5 frases novas</span>
                       <small>
                         {phrasePools.reviewable + phrasePools.fresh === 0 && phrasePools.total > 0
                           ? 'todas revisadas por hoje 🎉'
-                          : `${phrasePools.due} vencida${phrasePools.due === 1 ? '' : 's'} hoje · ${phrasePools.fresh} novas · ${phrasePools.total} no total`}
+                          : `${selectedThemes.length ? 'temas escolhidos' : 'todos os temas'} · ${phrasePools.total} frases`}
                       </small>
+                    </button>
+                    <button
+                      className="mode-card phrases-review"
+                      disabled={phrasePools.reviewable === 0}
+                      onClick={() => startStudy('phrasesReview')}
+                    >
+                      <span className="mode-icon" aria-hidden="true">🔁</span>
+                      <strong>Revisar frases</strong>
+                      <span className="mode-desc">10 frases já vistas, difíceis primeiro</span>
+                      <small>
+                        {phrasePools.reviewable === 0 && phrasePools.total > phrasePools.fresh
+                          ? 'todas revisadas por hoje 🎉'
+                          : `${phrasePools.due} vencida${phrasePools.due === 1 ? '' : 's'} hoje · ${phrasePools.reviewable} disponíveis`}
+                      </small>
+                    </button>
+                    <button
+                      className="mode-card phrases-new"
+                      disabled={phrasePools.fresh === 0}
+                      onClick={() => startStudy('phrasesNew')}
+                    >
+                      <span className="mode-icon" aria-hidden="true">🌱</span>
+                      <strong>Frases novas</strong>
+                      <span className="mode-desc">10 frases que você ainda não estudou</span>
+                      <small>{phrasePools.fresh} disponíve{phrasePools.fresh === 1 ? 'l' : 'is'}</small>
                     </button>
                   </div>
                 </>
@@ -1611,6 +1725,25 @@ export default function App() {
                   ✕
                 </button>
               </div>
+            </div>
+
+            <div className="lookup-info">
+              {lookup.loading ? (
+                <p className="lookup-translation loading">traduzindo…</p>
+              ) : lookup.translation ? (
+                <p className="lookup-translation">
+                  {lookup.translation}
+                  {lookup.source === 'online' && <span className="lookup-tag">tradução automática</span>}
+                </p>
+              ) : (
+                <p className="lookup-translation empty">sem tradução disponível offline</p>
+              )}
+              {pickedIpa.value && (
+                <p className="lookup-ipa">
+                  {pickedIpa.value}
+                  {pickedIpa.approximate && <span className="lookup-tag">aproximado</span>}
+                </p>
+              )}
             </div>
 
             {pickedMatches.direct.length > 0 ? (
