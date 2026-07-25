@@ -362,11 +362,17 @@ export default function App() {
   const [collectingCard, setCollectingCard] = useState<Card | null>(null)
   const [newCollectionName, setNewCollectionName] = useState('')
   const [activeCollection, setActiveCollection] = useState<Collection | null>(null)
-  const [lookup, setLookup] = useState<{ translation: string; source: 'card' | 'online' | 'none'; loading: boolean }>({
-    translation: '',
-    source: 'none',
+  const [extraExamples, setExtraExamples] = useState<Record<string, Example[]>>({})
+  const [examplesState, setExamplesState] = useState<{ loading: boolean; message: string }>({
     loading: false,
+    message: '',
   })
+  const [lookup, setLookup] = useState<{
+    translation: string
+    source: 'card' | 'online' | 'none'
+    loading: boolean
+    reason: '' | 'offline' | 'script' | 'empty'
+  }>({ translation: '', source: 'none', loading: false, reason: '' })
 
   const [sessionEntries, setSessionEntries] = useState<SessionEntry[]>([])
   const [sessions, setSessions] = useState<SessionRecord[]>(() => loadSessions())
@@ -564,8 +570,14 @@ export default function App() {
   const activeLanguage: Language = activeCard ? detectLanguage(activeCard) : 'en-US'
   const browseCard = browseId ? cardsById.get(browseId) : undefined
 
+  // O aviso do gerador de exemplos vale só para o card aberto no momento.
+  useEffect(() => {
+    setExamplesState({ loading: false, message: '' })
+  }, [activeCard?.id, browseId])
+
   // Sempre que a frente do card aparece (próximo card ou virada de volta),
   // o app fala a palavra/expressão automaticamente.
+
   useEffect(() => {
     if (screen !== 'study' || !activeCard || isRevealed) return
     if (browseId || searchOpen || picked || conjugationCard) return
@@ -605,6 +617,75 @@ export default function App() {
       reviewable: reviewable.length,
     }
   }, [phrases, selectedThemes])
+
+  /**
+   * Traz exemplos inéditos para a palavra: primeiro do próprio acervo (outros
+   * cards e frases que a usam — funciona offline), depois do gerador de IA do
+   * Apps Script, se houver chave configurada lá.
+   */
+  const loadMoreExamples = useCallback(
+    async (card: Card) => {
+      const already = new Set(
+        [...card.examples, ...(extraExamples[card.id] ?? [])].map((example) => normalize(example.text)),
+      )
+      const term = normalize(card.text)
+
+      const fromLibrary: Example[] = []
+      for (const other of allCards) {
+        if (other.id === card.id) continue
+        const candidates: Example[] = [
+          ...other.examples,
+          ...(other.source === 'phrases' ? [{ text: other.text, translation: other.translation }] : []),
+        ]
+        for (const candidate of candidates) {
+          if (!candidate.text || !normalize(candidate.text).includes(term)) continue
+          if (already.has(normalize(candidate.text))) continue
+          already.add(normalize(candidate.text))
+          fromLibrary.push(candidate)
+          if (fromLibrary.length >= 3) break
+        }
+        if (fromLibrary.length >= 3) break
+      }
+
+      if (fromLibrary.length) {
+        setExtraExamples((current) => ({ ...current, [card.id]: [...(current[card.id] ?? []), ...fromLibrary] }))
+        setExamplesState({ loading: false, message: `${fromLibrary.length} do seu acervo` })
+        return
+      }
+
+      if (!scriptUrl || !navigator.onLine) {
+        setExamplesState({ loading: false, message: 'sem exemplos novos offline' })
+        return
+      }
+
+      setExamplesState({ loading: true, message: '' })
+      try {
+        const avoid = [...card.examples, ...(extraExamples[card.id] ?? [])]
+          .map((example) => example.text)
+          .join(' | ')
+        const language = detectLanguage(card) === 'fr-FR' ? 'fr' : 'en'
+        const response = await fetch(
+          `${scriptUrl}${scriptUrl.includes('?') ? '&' : '?'}action=examples&lang=${language}` +
+            `&q=${encodeURIComponent(card.text)}&avoid=${encodeURIComponent(avoid.slice(0, 500))}`,
+        )
+        const data = await response.json()
+        if (data.ok && data.examples?.length) {
+          const generated = (data.examples as Example[]).filter(
+            (example) => example.text && !already.has(normalize(example.text)),
+          )
+          setExtraExamples((current) => ({ ...current, [card.id]: [...(current[card.id] ?? []), ...generated] }))
+          setExamplesState({ loading: false, message: `${generated.length} gerados` })
+        } else if (data.error === 'sem-chave') {
+          setExamplesState({ loading: false, message: 'configure GEMINI_API_KEY no Apps Script para gerar frases' })
+        } else {
+          setExamplesState({ loading: false, message: 'não consegui gerar agora' })
+        }
+      } catch {
+        setExamplesState({ loading: false, message: 'não consegui gerar agora' })
+      }
+    },
+    [allCards, extraExamples, scriptUrl],
+  )
 
   function persistCollections(next: Collection[]) {
     setCollections(next)
@@ -788,10 +869,11 @@ export default function App() {
   }, [picked, pickedMatches])
 
   // Tradução do trecho tocado: card exato → cache local → serviço do Apps
-  // Script (online). O resultado fica em cache para funcionar offline depois.
+  // Script → tradutor público (fallback) . O resultado fica em cache para
+  // repetir offline sem novo request.
   useEffect(() => {
     if (!picked) {
-      setLookup({ translation: '', source: 'none', loading: false })
+      setLookup({ translation: '', source: 'none', loading: false, reason: '' })
       return
     }
     const term = picked.term
@@ -799,44 +881,81 @@ export default function App() {
 
     const exact = pickedMatches.direct.find((card) => normalize(card.text) === normalize(term))
     if (exact?.translation) {
-      setLookup({ translation: exact.translation, source: 'card', loading: false })
+      setLookup({ translation: exact.translation, source: 'card', loading: false, reason: '' })
       return
     }
 
     const cache = readJson<Record<string, string>>(TRANSLATION_CACHE_KEY, {})
     if (cache[key]) {
-      setLookup({ translation: cache[key], source: 'online', loading: false })
+      setLookup({ translation: cache[key], source: 'online', loading: false, reason: '' })
       return
     }
 
-    const url = scriptUrl || phrasesUrl
-    if (!url || !navigator.onLine) {
-      setLookup({ translation: '', source: 'none', loading: false })
+    if (!navigator.onLine) {
+      setLookup({ translation: '', source: 'none', loading: false, reason: 'offline' })
       return
     }
 
     let cancelled = false
-    setLookup({ translation: '', source: 'none', loading: true })
+    setLookup({ translation: '', source: 'none', loading: true, reason: '' })
     const from = picked.language === 'fr-FR' ? 'fr' : 'en'
-    fetch(`${url}${url.includes('?') ? '&' : '?'}action=translate&from=${from}&to=pt&q=${encodeURIComponent(term)}`)
-      .then((response) => response.json())
-      .then((data) => {
-        if (cancelled) return
-        if (data.ok && data.translation) {
-          const updated = { ...readJson<Record<string, string>>(TRANSLATION_CACHE_KEY, {}), [key]: data.translation }
-          try {
-            localStorage.setItem(TRANSLATION_CACHE_KEY, JSON.stringify(updated))
-          } catch {
-            // storage cheio: segue sem cache
-          }
-          setLookup({ translation: data.translation, source: 'online', loading: false })
-        } else {
-          setLookup({ translation: '', source: 'none', loading: false })
+
+    function remember(translation: string) {
+      const updated = { ...readJson<Record<string, string>>(TRANSLATION_CACHE_KEY, {}), [key]: translation }
+      try {
+        localStorage.setItem(TRANSLATION_CACHE_KEY, JSON.stringify(updated))
+      } catch {
+        // storage cheio: segue sem cache
+      }
+    }
+
+    async function viaAppsScript(): Promise<string> {
+      const url = scriptUrl || phrasesUrl
+      if (!url) return ''
+      const response = await fetch(
+        `${url}${url.includes('?') ? '&' : '?'}action=translate&from=${from}&to=pt&q=${encodeURIComponent(term)}`,
+      )
+      const data = await response.json()
+      // Scripts ainda não republicados respondem "Ação desconhecida".
+      if (!data.ok) throw new Error(data.error || 'sem tradução')
+      return data.translation || ''
+    }
+
+    async function viaPublicApi(): Promise<string> {
+      const response = await fetch(
+        `https://api.mymemory.translated.net/get?q=${encodeURIComponent(term)}&langpair=${from}|pt-BR`,
+      )
+      const data = await response.json()
+      const translated: string = data?.responseData?.translatedText || ''
+      // O serviço devolve avisos em CAIXA ALTA quando a cota acaba.
+      if (!translated || /MYMEMORY WARNING|QUERY LENGTH LIMIT/i.test(translated)) return ''
+      return translated
+    }
+
+    ;(async () => {
+      let translation = ''
+      let scriptFailed = false
+      try {
+        translation = await viaAppsScript()
+      } catch {
+        scriptFailed = true
+      }
+      if (!translation) {
+        try {
+          translation = await viaPublicApi()
+        } catch {
+          // sem rede utilizável
         }
-      })
-      .catch(() => {
-        if (!cancelled) setLookup({ translation: '', source: 'none', loading: false })
-      })
+      }
+      if (cancelled) return
+      if (translation) {
+        remember(translation)
+        setLookup({ translation, source: 'online', loading: false, reason: '' })
+      } else {
+        setLookup({ translation: '', source: 'none', loading: false, reason: scriptFailed ? 'script' : 'empty' })
+      }
+    })()
+
     return () => {
       cancelled = true
     }
@@ -1086,34 +1205,37 @@ export default function App() {
               📖 Conjugação{card.verbType ? ` · ${card.verbType}` : ''}
             </button>
           )}
-          {card.examples.length > 0 && (
-            <div className="examples">
-              <h3>
-                Exemplos <span className="examples-hint">· toque numa palavra para ouvir ou consultar</span>
-              </h3>
-              {card.examples.map((example, index) => (
-                <div className="example" key={index}>
-                  <div className="example-line">
-                    <p
-                      className="example-text selectable"
-                      onMouseUp={() => handleTextSelection(language)}
-                      onTouchEnd={() => handleTextSelection(language)}
-                    >
-                      <SelectableText text={example.text} term={card.text} language={language} onPick={pick} />
-                    </p>
-                    <button
-                      className="mini-listen"
-                      aria-label="Ouvir exemplo"
-                      onClick={() => speak(example.text, language)}
-                    >
-                      🔊
-                    </button>
-                  </div>
-                  {example.translation && <p className="example-translation">{example.translation}</p>}
+          <div className="examples">
+            <h3>
+              Exemplos <span className="examples-hint">· toque numa palavra para ouvir ou consultar</span>
+            </h3>
+            {[...card.examples, ...(extraExamples[card.id] ?? [])].map((example, index) => (
+              <div className={`example ${index >= card.examples.length ? 'extra' : ''}`} key={`${index}-${example.text}`}>
+                <div className="example-line">
+                  <p
+                    className="example-text selectable"
+                    onMouseUp={() => handleTextSelection(language)}
+                    onTouchEnd={() => handleTextSelection(language)}
+                  >
+                    <SelectableText text={example.text} term={card.text} language={language} onPick={pick} />
+                  </p>
+                  <button
+                    className="mini-listen"
+                    aria-label="Ouvir exemplo"
+                    onClick={() => speak(example.text, language)}
+                  >
+                    🔊
+                  </button>
                 </div>
-              ))}
-            </div>
-          )}
+                {example.translation && <p className="example-translation">{example.translation}</p>}
+              </div>
+            ))}
+
+            <button className="more-examples" disabled={examplesState.loading} onClick={() => loadMoreExamples(card)}>
+              {examplesState.loading ? 'buscando…' : '✨ Mais exemplos'}
+            </button>
+            {examplesState.message && <p className="examples-status">{examplesState.message}</p>}
+          </div>
         </div>
       </div>
     )
@@ -1739,13 +1861,14 @@ export default function App() {
                       </button>
                     </div>
 
-                    {activeCard.examples.length > 0 && (
-                      <div className="examples">
-                        <h3>
-                          Exemplos <span className="examples-hint">· toque numa palavra para consultar</span>
-                        </h3>
-                        {activeCard.examples.map((example, index) => (
-                          <div className="example" key={index}>
+                    <div className="examples">
+                      <h3>
+                        Exemplos <span className="examples-hint">· toque numa palavra para consultar</span>
+                      </h3>
+                      {[...activeCard.examples, ...(extraExamples[activeCard.id] ?? [])].map((example, index) => {
+                        const isExtra = index >= activeCard.examples.length
+                        return (
+                          <div className={`example ${isExtra ? 'extra' : ''}`} key={`${index}-${example.text}`}>
                             <div className="example-line">
                               <p
                                 className="example-text selectable"
@@ -1772,9 +1895,21 @@ export default function App() {
                             </div>
                             {example.translation && <p className="example-translation">{example.translation}</p>}
                           </div>
-                        ))}
-                      </div>
-                    )}
+                        )
+                      })}
+
+                      <button
+                        className="more-examples"
+                        disabled={examplesState.loading}
+                        onClick={(event) => {
+                          event.stopPropagation()
+                          loadMoreExamples(activeCard)
+                        }}
+                      >
+                        {examplesState.loading ? 'buscando…' : '✨ Mais exemplos'}
+                      </button>
+                      {examplesState.message && <p className="examples-status">{examplesState.message}</p>}
+                    </div>
                   </div>
                 </div>
               </div>
@@ -1960,7 +2095,13 @@ export default function App() {
                   {lookup.source === 'online' && <span className="lookup-tag">tradução automática</span>}
                 </p>
               ) : (
-                <p className="lookup-translation empty">sem tradução disponível offline</p>
+                <p className="lookup-translation empty">
+                  {lookup.reason === 'offline'
+                    ? 'sem internet — a tradução aparece quando você reconectar'
+                    : lookup.reason === 'script'
+                      ? 'republique o Apps Script para ativar a tradução automática'
+                      : 'tradução não encontrada'}
+                </p>
               )}
               {pickedIpa.value && (
                 <p className="lookup-ipa">

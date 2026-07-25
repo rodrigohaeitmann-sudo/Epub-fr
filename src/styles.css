@@ -356,6 +356,21 @@ mark.pickable { background: var(--accent-soft); color: var(--accent-strong); pad
 
 .example { padding: 10px 13px; border-left: 3px solid var(--accent-soft2); border-radius: 0 10px 10px 0; background: var(--track); }
 .example + .example { margin-top: 8px; }
+.example.extra { border-left-color: var(--accent); }
+
+.more-examples {
+  width: 100%;
+  margin-top: 10px;
+  padding: 11px;
+  border: 1px dashed var(--accent-soft2);
+  border-radius: 12px;
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+  font-weight: 700;
+  font-size: 13px;
+}
+.more-examples:disabled { opacity: 0.6; cursor: wait; }
+.examples-status { margin: 6px 0 0; color: var(--faint); font-size: 12px; text-align: center; }
 .example-line { display: flex; align-items: flex-start; gap: 8px; }
 .example-text { margin: 0; flex: 1; color: var(--text); font-weight: 500; line-height: 1.55; font-size: 14px; }
 .example-translation { margin: 5px 0 0; color: var(--sub); font-size: 13px; line-height: 1.5; }

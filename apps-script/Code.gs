@@ -40,6 +40,7 @@ function doGet(event) {
     if (action === 'ping') return json_({ ok: true, version: 3 })
     if (action === 'cards') return json_({ ok: true, today: dateKey_(new Date()), cards: getCards_() })
     if (action === 'translate') return json_(translateText_(params))
+    if (action === 'examples') return json_(generateExamples_(params))
     return json_({ ok: false, error: 'Ação desconhecida: ' + action })
   } catch (error) {
     return json_({ ok: false, error: String(error && error.message ? error.message : error) })
@@ -144,6 +145,57 @@ function translateText_(params) {
   const target = String(params.to || 'pt')
   try {
     return { ok: true, q: text, translation: LanguageApp.translate(text, source, target) }
+  } catch (error) {
+    return { ok: false, error: String(error && error.message ? error.message : error) }
+  }
+}
+
+/**
+ * Gera novas frases de exemplo para uma palavra/expressão, usando a API do
+ * Gemini. Opcional: só funciona se você guardar a chave nas propriedades do
+ * script (Configurações do projeto → Propriedades do script →
+ * GEMINI_API_KEY). Sem chave, o app usa apenas os exemplos da planilha.
+ */
+function generateExamples_(params) {
+  const term = String(params.q || '').trim()
+  if (!term) return { ok: false, error: 'Envie a palavra em q.' }
+
+  const key = PropertiesService.getScriptProperties().getProperty('GEMINI_API_KEY')
+  if (!key) return { ok: false, error: 'sem-chave', hint: 'Defina GEMINI_API_KEY nas propriedades do script.' }
+
+  const language = String(params.lang || 'fr') === 'en' ? 'inglês' : 'francês'
+  const avoid = String(params.avoid || '')
+  const prompt =
+    'Escreva 3 frases curtas e naturais em ' + language + ' usando "' + term + '". ' +
+    'Cada frase deve ter no máximo 12 palavras e vir com a tradução em português do Brasil. ' +
+    (avoid ? 'Não repita estas frases: ' + avoid + '. ' : '') +
+    'Responda SOMENTE com JSON no formato: ' +
+    '{"examples":[{"text":"frase","translation":"tradução"}]}'
+
+  try {
+    const response = UrlFetchApp.fetch(
+      'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=' + key,
+      {
+        method: 'post',
+        contentType: 'application/json',
+        muteHttpExceptions: true,
+        payload: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: { temperature: 1, responseMimeType: 'application/json' },
+        }),
+      },
+    )
+    const body = JSON.parse(response.getContentText())
+    const text = body && body.candidates && body.candidates[0] &&
+      body.candidates[0].content && body.candidates[0].content.parts[0].text
+    if (!text) return { ok: false, error: 'Resposta vazia do gerador.' }
+    const parsed = JSON.parse(text)
+    const examples = (parsed.examples || [])
+      .filter(function (item) { return item && item.text })
+      .slice(0, 3)
+      .map(function (item) { return { text: String(item.text), translation: String(item.translation || '') } })
+    if (!examples.length) return { ok: false, error: 'Nenhum exemplo gerado.' }
+    return { ok: true, q: term, examples: examples }
   } catch (error) {
     return { ok: false, error: String(error && error.message ? error.message : error) }
   }
