@@ -50,7 +50,13 @@ volta (evento `online` + retentativa periódica).
   `apps-script/Frases.gs`) alimenta blocos de 10 frases — cada aba é um tema,
   escolhido por chips no menu; francês na frente (falado automaticamente),
   tradução no verso, mesma avaliação e agendamento das palavras, com progresso
-  gravado na aba `Progresso` da planilha de frases.
+  gravado na aba `Progresso` da planilha de frases. Três modos, como nas
+  palavras: *sugeridas* (5 revisões + 5 novas), *revisar* (10 já vistas) e
+  *novas* (10 inéditas).
+- **Consulta de trecho**: tocar numa palavra/frase mostra a tradução e a
+  pronúncia em IPA — do card quando a palavra está na planilha, senão tradução
+  automática (cacheada para uso offline) e IPA aproximado gerado por regras
+  (`src/ipa.ts`).
 - **Blocos já feitos**: o menu inicial lista o histórico de blocos (modo, data
   e nº de cards); cada bloco expande para mostrar o resultado por expressão
   (difícil/padrão/fácil), e cada expressão reabre a ficha completa.
