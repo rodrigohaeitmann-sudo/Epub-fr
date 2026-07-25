@@ -34,7 +34,18 @@ type PendingReview = { id: string; text: string; result: ReviewResult; at: strin
 type SessionEntry = { id: string; text: string; translation: string; language: string; result: ReviewResult }
 type SessionRecord = { at: string; entries: SessionEntry[]; mode?: string }
 
-type StudyMode = 'suggested' | 'review' | 'new' | 'phrases' | 'phrasesReview' | 'phrasesNew' | 'practice'
+type StudyMode =
+  | 'suggested'
+  | 'review'
+  | 'new'
+  | 'phrases'
+  | 'phrasesReview'
+  | 'phrasesNew'
+  | 'collection'
+  | 'practice'
+
+/** Coleção montada pelo usuário: palavras e/ou frases marcadas como prioritárias. */
+type Collection = { id: string; name: string; cardIds: string[]; createdAt: string }
 
 const MODE_LABEL: Record<StudyMode, string> = {
   suggested: 'Estudo sugerido',
@@ -43,6 +54,7 @@ const MODE_LABEL: Record<StudyMode, string> = {
   phrases: 'Frases sugeridas',
   phrasesReview: 'Frases · revisão',
   phrasesNew: 'Frases · novas',
+  collection: 'Coleção',
   practice: 'Prática',
 }
 
@@ -56,6 +68,7 @@ const PHRASES_URL_KEY = 'phrasesScriptUrl'
 const PHRASES_CACHE_KEY = 'reviewPhrasesCache'
 const THEMES_KEY = 'phraseThemes'
 const TRANSLATION_CACHE_KEY = 'lookupTranslations'
+const COLLECTIONS_KEY = 'reviewCollections'
 const SESSIONS_KEY = 'reviewSessions'
 const MAX_SESSIONS = 30
 
@@ -237,6 +250,14 @@ function savePending(pending: PendingReview[]) {
   localStorage.setItem(PENDING_KEY, JSON.stringify(pending))
 }
 
+function loadCollections(): Collection[] {
+  return readJson<Collection[]>(COLLECTIONS_KEY, [])
+}
+
+function saveCollections(collections: Collection[]) {
+  localStorage.setItem(COLLECTIONS_KEY, JSON.stringify(collections))
+}
+
 function loadSessions(): SessionRecord[] {
   return readJson<SessionRecord[]>(SESSIONS_KEY, [])
 }
@@ -337,6 +358,10 @@ export default function App() {
   const [browseId, setBrowseId] = useState<string | null>(null)
   const [picked, setPicked] = useState<{ term: string; language: Language } | null>(null)
   const [conjugationCard, setConjugationCard] = useState<Card | null>(null)
+  const [collections, setCollections] = useState<Collection[]>(() => loadCollections())
+  const [collectingCard, setCollectingCard] = useState<Card | null>(null)
+  const [newCollectionName, setNewCollectionName] = useState('')
+  const [activeCollection, setActiveCollection] = useState<Collection | null>(null)
   const [lookup, setLookup] = useState<{ translation: string; source: 'card' | 'online' | 'none'; loading: boolean }>({
     translation: '',
     source: 'none',
@@ -524,7 +549,7 @@ export default function App() {
       const record: SessionRecord = {
         at: new Date().toISOString(),
         entries: sessionEntries,
-        mode: MODE_LABEL[mode ?? 'practice'],
+        mode: activeCollection ? `Coleção · ${activeCollection.name}` : MODE_LABEL[mode ?? 'practice'],
       }
       const updated = [record, ...loadSessions()].slice(0, MAX_SESSIONS)
       localStorage.setItem(SESSIONS_KEY, JSON.stringify(updated))
@@ -533,7 +558,7 @@ export default function App() {
       setSessionEntries([])
     }
     prevQueueLength.current = queue.length
-  }, [queue, sessionEntries, mode])
+  }, [queue, sessionEntries, mode, activeCollection])
 
   const activeCard = queue.length ? cardsById.get(queue[0]) : undefined
   const activeLanguage: Language = activeCard ? detectLanguage(activeCard) : 'en-US'
@@ -581,6 +606,48 @@ export default function App() {
     }
   }, [phrases, selectedThemes])
 
+  function persistCollections(next: Collection[]) {
+    setCollections(next)
+    saveCollections(next)
+  }
+
+  function toggleInCollection(collectionId: string, cardId: string) {
+    persistCollections(
+      collections.map((collection) =>
+        collection.id === collectionId
+          ? {
+              ...collection,
+              cardIds: collection.cardIds.includes(cardId)
+                ? collection.cardIds.filter((item) => item !== cardId)
+                : [...collection.cardIds, cardId],
+            }
+          : collection,
+      ),
+    )
+  }
+
+  function createCollection(name: string, cardId?: string) {
+    const trimmed = name.trim()
+    if (!trimmed) return
+    const collection: Collection = {
+      id: `col-${Date.now().toString(36)}`,
+      name: trimmed,
+      cardIds: cardId ? [cardId] : [],
+      createdAt: new Date().toISOString(),
+    }
+    persistCollections([...collections, collection])
+    setNewCollectionName('')
+  }
+
+  function removeCollection(collectionId: string) {
+    persistCollections(collections.filter((collection) => collection.id !== collectionId))
+  }
+
+  /** Coleções que já contêm um card (para marcar o botão de salvar). */
+  function collectionsWith(cardId: string) {
+    return collections.filter((collection) => collection.cardIds.includes(cardId))
+  }
+
   /**
    * Monta o bloco de estudo conforme o modo:
    * - suggested: 5 revisões (na ordem de prioridade) + 5 novas aleatórias,
@@ -603,7 +670,15 @@ export default function App() {
     const fresh = shuffle(eligible.filter((card) => !card.nextReview))
 
     let block: Card[] = []
-    if (nextMode === 'practice' && singleId) {
+    if (nextMode === 'collection' && singleId) {
+      const collection = collections.find((item) => item.id === singleId)
+      const cards = (collection?.cardIds ?? []).map((id) => cardsById.get(id)).filter(Boolean) as Card[]
+      // Coleção é revisão sob demanda: não exclui o que já foi estudado hoje.
+      const dueFirst = reviewOrder(cards.filter((card) => card.nextReview), today)
+      const neverSeen = shuffle(cards.filter((card) => !card.nextReview))
+      block = [...dueFirst, ...neverSeen].slice(0, BLOCK_SIZE)
+      setActiveCollection(collection ?? null)
+    } else if (nextMode === 'practice' && singleId) {
       const card = cardsById.get(singleId)
       block = card ? [card] : []
     } else if (nextMode === 'phrases' || nextMode === 'phrasesReview' || nextMode === 'phrasesNew') {
@@ -644,6 +719,7 @@ export default function App() {
     }
     if (!block.length) return
 
+    if (nextMode !== 'collection') setActiveCollection(null)
     setMode(nextMode)
     setQueue(block.map((card) => card.id))
     setBlockSize(block.length)
@@ -857,13 +933,21 @@ export default function App() {
     function onKeyDown(event: KeyboardEvent) {
       if (event.target instanceof HTMLInputElement) {
         if (event.key === 'Escape') {
-          setSearchOpen(false)
-          setSearchQuery('')
+          if (collectingCard) {
+            setCollectingCard(null)
+            setNewCollectionName('')
+          } else {
+            setSearchOpen(false)
+            setSearchQuery('')
+          }
         }
         return
       }
       if (event.key === 'Escape') {
-        if (conjugationCard) setConjugationCard(null)
+        if (collectingCard) {
+          setCollectingCard(null)
+          setNewCollectionName('')
+        } else if (conjugationCard) setConjugationCard(null)
         else if (picked) setPicked(null)
         else if (browseId) setBrowseId(null)
         else if (searchOpen) {
@@ -874,7 +958,7 @@ export default function App() {
         }
         return
       }
-      if (picked || browseId || searchOpen || conjugationCard || screen !== 'study') return
+      if (picked || browseId || searchOpen || conjugationCard || collectingCard || screen !== 'study') return
       if (event.code === 'Space' || event.key === 'Enter') {
         if (activeCard) {
           event.preventDefault()
@@ -891,7 +975,18 @@ export default function App() {
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [isRevealed, activeCard, activeLanguage, answer, browseId, searchOpen, picked, conjugationCard, screen])
+  }, [
+    isRevealed,
+    activeCard,
+    activeLanguage,
+    answer,
+    browseId,
+    searchOpen,
+    picked,
+    conjugationCard,
+    collectingCard,
+    screen,
+  ])
 
   useEffect(() => {
     if (searchOpen) searchInputRef.current?.focus()
@@ -929,9 +1024,17 @@ export default function App() {
           <button className="back" onClick={() => setBrowseId(null)}>
             ← Voltar
           </button>
-          <button className="practice" onClick={() => practiceNow(card.id)}>
-            🎯 Praticar agora
-          </button>
+          <div className="browse-actions">
+            <button
+              className={`collect-button ${collectionsWith(card.id).length ? 'saved' : ''}`}
+              onClick={() => setCollectingCard(card)}
+            >
+              {collectionsWith(card.id).length ? '★' : '☆'}
+            </button>
+            <button className="practice" onClick={() => practiceNow(card.id)}>
+              🎯 Praticar agora
+            </button>
+          </div>
         </div>
 
         <div className="card-meta">
@@ -1289,6 +1392,7 @@ export default function App() {
           <div className="progress-track">
             <div className="progress-fill" style={{ width: `${progressPercent}%` }} />
           </div>
+          {activeCollection && <span className="study-collection">⭐ {activeCollection.name}</span>}
           <span className="study-count">
             {queue.length ? `${Math.min(sessionEntries.length + 1, blockSize)}/${blockSize}` : `${blockSize}/${blockSize}`}
           </span>
@@ -1450,6 +1554,49 @@ export default function App() {
                 </>
               )}
 
+              {collections.length > 0 && (
+                <>
+                  <p className="section-label">Minhas coleções</p>
+                  <div className="mode-grid">
+                    {collections.map((collection) => {
+                      const items = collection.cardIds.map((id) => cardsById.get(id)).filter(Boolean) as Card[]
+                      const due = items.filter((card) => !card.nextReview || card.nextReview <= todayKey()).length
+                      return (
+                        <div className="collection-row" key={collection.id}>
+                          <button
+                            className="mode-card collection"
+                            disabled={items.length === 0}
+                            onClick={() => startStudy('collection', collection.id)}
+                          >
+                            <span className="mode-icon" aria-hidden="true">⭐</span>
+                            <strong>{collection.name}</strong>
+                            <span className="mode-desc">
+                              {items.length} {items.length === 1 ? 'item salvo' : 'itens salvos'}
+                            </span>
+                            <small>
+                              {items.length === 0
+                                ? 'coleção vazia — salve cards com ☆'
+                                : `${due} para revisar · revisão livre, quando quiser`}
+                            </small>
+                          </button>
+                          <button
+                            className="collection-remove"
+                            aria-label={`Excluir coleção ${collection.name}`}
+                            onClick={() => {
+                              if (window.confirm(`Excluir a coleção "${collection.name}"? Os cards não são apagados.`)) {
+                                removeCollection(collection.id)
+                              }
+                            }}
+                          >
+                            🗑
+                          </button>
+                        </div>
+                      )
+                    })}
+                  </div>
+                </>
+              )}
+
               {sessions.length > 0 && (
                 <div className="history">
                   <h3>Blocos de estudo já feitos</h3>
@@ -1569,17 +1716,28 @@ export default function App() {
                       </p>
                     )}
 
-                    {(activeCard.conjugations?.length ?? 0) > 0 && (
+                    <div className="back-actions">
+                      {(activeCard.conjugations?.length ?? 0) > 0 && (
+                        <button
+                          className="conj-button"
+                          onClick={(event) => {
+                            event.stopPropagation()
+                            setConjugationCard(activeCard)
+                          }}
+                        >
+                          📖 Conjugação{activeCard.verbType ? ` · ${activeCard.verbType}` : ''}
+                        </button>
+                      )}
                       <button
-                        className="conj-button"
+                        className={`collect-button ${collectionsWith(activeCard.id).length ? 'saved' : ''}`}
                         onClick={(event) => {
                           event.stopPropagation()
-                          setConjugationCard(activeCard)
+                          setCollectingCard(activeCard)
                         }}
                       >
-                        📖 Conjugação{activeCard.verbType ? ` · ${activeCard.verbType}` : ''}
+                        {collectionsWith(activeCard.id).length ? '★ Nas coleções' : '☆ Salvar'}
                       </button>
-                    )}
+                    </div>
 
                     {activeCard.examples.length > 0 && (
                       <div className="examples">
@@ -1660,6 +1818,72 @@ export default function App() {
             </div>
           )}
         </section>
+      )}
+
+      {collectingCard && (
+        <div
+          className="sheet-backdrop"
+          onClick={() => {
+            setCollectingCard(null)
+            setNewCollectionName('')
+          }}
+        >
+          <div
+            className="word-sheet collect-sheet"
+            role="dialog"
+            aria-label={`Salvar em coleção: ${collectingCard.text}`}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="word-sheet-head">
+              <div>
+                <strong className="word-term">{collectingCard.text}</strong>
+                <p className="conj-type">salvar em coleções</p>
+              </div>
+              <button
+                className="word-close"
+                aria-label="Fechar"
+                onClick={() => {
+                  setCollectingCard(null)
+                  setNewCollectionName('')
+                }}
+              >
+                ✕
+              </button>
+            </div>
+
+            {collections.length > 0 && (
+              <ul className="collection-list">
+                {collections.map((collection) => {
+                  const saved = collection.cardIds.includes(collectingCard.id)
+                  return (
+                    <li key={collection.id}>
+                      <button
+                        className={saved ? 'saved' : ''}
+                        onClick={() => toggleInCollection(collection.id, collectingCard.id)}
+                      >
+                        <span aria-hidden="true">{saved ? '★' : '☆'}</span>
+                        <span className="collection-name">{collection.name}</span>
+                        <span className="collection-count">{collection.cardIds.length}</span>
+                      </button>
+                    </li>
+                  )
+                })}
+              </ul>
+            )}
+
+            <div className="settings-row new-collection">
+              <input
+                placeholder="Nova coleção (ex.: Trabalho)"
+                value={newCollectionName}
+                onChange={(event) => setNewCollectionName(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') createCollection(newCollectionName, collectingCard.id)
+                }}
+              />
+              <button onClick={() => createCollection(newCollectionName, collectingCard.id)}>Criar</button>
+            </div>
+          </div>
+        </div>
       )}
 
       {conjugationCard && (
