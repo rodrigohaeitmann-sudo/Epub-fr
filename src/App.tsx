@@ -47,6 +47,16 @@ type StudyMode =
 /** Coleção montada pelo usuário: palavras e/ou frases marcadas como prioritárias. */
 type Collection = { id: string; name: string; cardIds: string[]; createdAt: string }
 
+/** Como montar o bloco de uma coleção: quantos cards e em que ordem. */
+type CollectionOrder = 'shuffle' | 'priority' | 'least'
+type CollectionPlan = { size: number | 'all'; order: CollectionOrder }
+
+const COLLECTION_ORDER_LABEL: Record<CollectionOrder, { icon: string; label: string; hint: string }> = {
+  shuffle: { icon: '🔀', label: 'Embaralhar', hint: 'ordem sorteada a cada bloco' },
+  least: { icon: '🌱', label: 'Menos vistas', hint: 'começa pelas que você menos revisou' },
+  priority: { icon: '⏱', label: 'Prioridade', hint: 'difíceis e perto da hora de revisar' },
+}
+
 const MODE_LABEL: Record<StudyMode, string> = {
   suggested: 'Estudo sugerido',
   review: 'Revisão',
@@ -70,6 +80,7 @@ const THEMES_KEY = 'phraseThemes'
 const TRANSLATION_CACHE_KEY = 'lookupTranslations'
 const COLLECTIONS_KEY = 'reviewCollections'
 const SESSIONS_KEY = 'reviewSessions'
+const SPEECH_KEY = 'speechSettings'
 const MAX_SESSIONS = 30
 
 // Mesma escada de intervalos do Apps Script (apps-script/Code.gs).
@@ -131,17 +142,45 @@ if ('speechSynthesis' in window) {
   window.speechSynthesis.addEventListener('voiceschanged', loadVoices)
 }
 
+/** Identifica uma voz de forma estável entre sessões (o voiceURI muda). */
+function voiceKey(voice: SpeechSynthesisVoice) {
+  return `${voice.name}|${voice.lang}`
+}
+
+/** Vozes instaladas no aparelho para um idioma — cada uma é um sotaque. */
+function voicesFor(list: SpeechSynthesisVoice[], language: Language) {
+  const prefix = language.slice(0, 2).toLowerCase()
+  return list.filter((voice) => voice.lang.toLowerCase().replace('_', '-').startsWith(prefix))
+}
+
+type SpeechPrefs = { rate: number; voices: Record<Language, string> }
+const DEFAULT_SPEECH: SpeechPrefs = { rate: 0.9, voices: { 'fr-FR': '', 'en-US': '' } }
+
+// Preferências de voz/velocidade ficam num módulo para que `speak` (usada em
+// dezenas de lugares) continue com a mesma assinatura.
+let speechPrefs: SpeechPrefs = DEFAULT_SPEECH
+
+function applySpeechPrefs(prefs: SpeechPrefs) {
+  speechPrefs = prefs
+}
+
 function speak(text: string, language: Language) {
   if (!('speechSynthesis' in window) || !text) return
   window.speechSynthesis.cancel()
   const utterance = new SpeechSynthesisUtterance(text)
   utterance.lang = language
-  utterance.rate = language === 'fr-FR' ? 0.88 : 0.92
+  utterance.rate = speechPrefs.rate
+  const chosen = speechPrefs.voices[language]
+  const sameLang = voicesFor(voicesCache, language)
   const voice =
-    voicesCache.find((item) => item.lang === language && item.localService) ||
-    voicesCache.find((item) => item.lang === language) ||
-    voicesCache.find((item) => item.lang.startsWith(language.slice(0, 2)))
-  if (voice) utterance.voice = voice
+    (chosen && sameLang.find((item) => voiceKey(item) === chosen)) ||
+    sameLang.find((item) => item.lang.replace('_', '-') === language && item.localService) ||
+    sameLang.find((item) => item.lang.replace('_', '-') === language) ||
+    sameLang[0]
+  if (voice) {
+    utterance.voice = voice
+    utterance.lang = voice.lang
+  }
   window.speechSynthesis.speak(utterance)
 }
 
@@ -262,6 +301,20 @@ function loadSessions(): SessionRecord[] {
   return readJson<SessionRecord[]>(SESSIONS_KEY, [])
 }
 
+function loadSpeechPrefs(): SpeechPrefs {
+  const stored = readJson<Partial<SpeechPrefs>>(SPEECH_KEY, {})
+  const rate = Number(stored.rate)
+  return {
+    rate: Number.isFinite(rate) && rate >= 0.5 && rate <= 1.5 ? rate : DEFAULT_SPEECH.rate,
+    voices: {
+      'fr-FR': String(stored.voices?.['fr-FR'] ?? ''),
+      'en-US': String(stored.voices?.['en-US'] ?? ''),
+    },
+  }
+}
+
+applySpeechPrefs(loadSpeechPrefs())
+
 /** Reaplica localmente respostas ainda não sincronizadas sobre os dados do servidor. */
 function applyPending(cards: Card[], pending: PendingReview[]): Card[] {
   if (!pending.length) return cards
@@ -344,7 +397,9 @@ export default function App() {
   const [phrases, setPhrases] = useState<Card[]>([])
   const [selectedThemes, setSelectedThemes] = useState<string[]>(() => readJson<string[]>(THEMES_KEY, []))
   const [queue, setQueue] = useState<string[]>([])
-  const [screen, setScreen] = useState<'home' | 'study' | 'stats' | 'settings'>(scriptUrl ? 'home' : 'settings')
+  const [screen, setScreen] = useState<'home' | 'study' | 'stats' | 'settings' | 'collection'>(
+    scriptUrl ? 'home' : 'settings',
+  )
   const [mode, setMode] = useState<StudyMode | null>(null)
   const [blockSize, setBlockSize] = useState(0)
   const [languageFilter, setLanguageFilter] = useState<'all' | Language>('all')
@@ -362,6 +417,10 @@ export default function App() {
   const [collectingCard, setCollectingCard] = useState<Card | null>(null)
   const [newCollectionName, setNewCollectionName] = useState('')
   const [activeCollection, setActiveCollection] = useState<Collection | null>(null)
+  const [openCollectionId, setOpenCollectionId] = useState<string | null>(null)
+  const [collectionPlan, setCollectionPlan] = useState<CollectionPlan>({ size: BLOCK_SIZE, order: 'shuffle' })
+  const [voices, setVoices] = useState<SpeechSynthesisVoice[]>(() => voicesCache)
+  const [speech, setSpeech] = useState<SpeechPrefs>(() => loadSpeechPrefs())
   const [extraExamples, setExtraExamples] = useState<Record<string, Example[]>>({})
   const [examplesState, setExamplesState] = useState<{ loading: boolean; message: string }>({
     loading: false,
@@ -539,6 +598,25 @@ export default function App() {
     }
   }, [scriptUrl, phrasesUrl, flushPending])
 
+  // A lista de vozes do aparelho chega assíncrona no Chrome/Android.
+  useEffect(() => {
+    if (!('speechSynthesis' in window)) return
+    const update = () => setVoices(window.speechSynthesis.getVoices())
+    update()
+    window.speechSynthesis.addEventListener('voiceschanged', update)
+    return () => window.speechSynthesis.removeEventListener('voiceschanged', update)
+  }, [])
+
+  function updateSpeech(next: SpeechPrefs) {
+    setSpeech(next)
+    applySpeechPrefs(next)
+    try {
+      localStorage.setItem(SPEECH_KEY, JSON.stringify(next))
+    } catch {
+      // storage cheio: a preferência vale só nesta sessão
+    }
+  }
+
   // Retentativa periódica: cobre o caso em que o evento "online" chega
   // enquanto uma tentativa de sync ainda está falhando.
   useEffect(() => {
@@ -569,6 +647,7 @@ export default function App() {
   const activeCard = queue.length ? cardsById.get(queue[0]) : undefined
   const activeLanguage: Language = activeCard ? detectLanguage(activeCard) : 'en-US'
   const browseCard = browseId ? cardsById.get(browseId) : undefined
+  const openCollection = openCollectionId ? collections.find((item) => item.id === openCollectionId) : undefined
 
   // O aviso do gerador de exemplos vale só para o card aberto no momento.
   useEffect(() => {
@@ -738,7 +817,7 @@ export default function App() {
    * - phrases: 10 frases dos temas escolhidos — vencidas primeiro (ordem de
    *   prioridade), completando com novas aleatórias.
    */
-  function startStudy(nextMode: StudyMode, singleId?: string) {
+  function startStudy(nextMode: StudyMode, singleId?: string, plan?: CollectionPlan) {
     const today = todayKey()
     const eligible = cardsRef.current.filter(
       (card) => languageFilter === 'all' || detectLanguage(card) === languageFilter,
@@ -754,10 +833,24 @@ export default function App() {
     if (nextMode === 'collection' && singleId) {
       const collection = collections.find((item) => item.id === singleId)
       const cards = (collection?.cardIds ?? []).map((id) => cardsById.get(id)).filter(Boolean) as Card[]
+      const { size, order } = plan ?? collectionPlan
       // Coleção é revisão sob demanda: não exclui o que já foi estudado hoje.
-      const dueFirst = reviewOrder(cards.filter((card) => card.nextReview), today)
-      const neverSeen = shuffle(cards.filter((card) => !card.nextReview))
-      block = [...dueFirst, ...neverSeen].slice(0, BLOCK_SIZE)
+      let sorted: Card[]
+      if (order === 'priority') {
+        sorted = [
+          ...reviewOrder(cards.filter((card) => card.nextReview), today),
+          ...shuffle(cards.filter((card) => !card.nextReview)),
+        ]
+      } else if (order === 'least') {
+        // Menos revisadas primeiro; empate desempata pela data mais antiga.
+        sorted = shuffle(cards).sort(
+          (a, b) =>
+            a.repetitions - b.repetitions || (a.lastReviewedAt || '').localeCompare(b.lastReviewedAt || ''),
+        )
+      } else {
+        sorted = shuffle(cards)
+      }
+      block = size === 'all' ? sorted : sorted.slice(0, Math.max(1, size))
       setActiveCollection(collection ?? null)
     } else if (nextMode === 'practice' && singleId) {
       const card = cardsById.get(singleId)
@@ -1072,7 +1165,8 @@ export default function App() {
         else if (searchOpen) {
           setSearchOpen(false)
           setSearchQuery('')
-        } else if (screen === 'stats' || screen === 'settings') {
+        } else if (screen === 'stats' || screen === 'settings' || screen === 'collection') {
+          setOpenCollectionId(null)
           setScreen('home')
         }
         return
@@ -1241,6 +1335,129 @@ export default function App() {
     )
   }
 
+  /**
+   * Tela de uma coleção: a lista completa do que foi salvo, com controle de
+   * quantos cards entram no bloco e em que ordem — para não cair sempre nos
+   * mesmos 10.
+   */
+  function renderCollection(collection: Collection) {
+    const items = collection.cardIds.map((id) => cardsById.get(id)).filter(Boolean) as Card[]
+    const today = todayKey()
+    const due = items.filter((card) => !card.nextReview || card.nextReview <= today).length
+    const sizeOptions = [5, 10, 20, 30].filter((size) => size < items.length)
+    const planned = collectionPlan.size === 'all' ? items.length : Math.min(collectionPlan.size, items.length)
+
+    return (
+      <div className="subscreen collection-screen">
+        <div className="subscreen-head">
+          <button
+            className="back"
+            aria-label="Voltar"
+            onClick={() => {
+              setOpenCollectionId(null)
+              setScreen('home')
+            }}
+          >
+            ←
+          </button>
+          <h2>⭐ {collection.name}</h2>
+        </div>
+
+        <p className="collection-summary">
+          {items.length} {items.length === 1 ? 'item salvo' : 'itens salvos'} · {due} para revisar hoje ·
+          revisão livre, quando quiser
+        </p>
+
+        {items.length === 0 ? (
+          <p className="search-hint">Coleção vazia — salve cards com ☆ no verso ou na ficha.</p>
+        ) : (
+          <>
+            <div className="setting-block">
+              <span className="setting-title">Quantos cards neste bloco</span>
+              <div className="chips size-chips">
+                {sizeOptions.map((size) => (
+                  <button
+                    key={size}
+                    className={collectionPlan.size === size ? 'active' : ''}
+                    onClick={() => setCollectionPlan({ ...collectionPlan, size })}
+                  >
+                    {size}
+                  </button>
+                ))}
+                <button
+                  className={collectionPlan.size === 'all' || planned === items.length ? 'active' : ''}
+                  onClick={() => setCollectionPlan({ ...collectionPlan, size: 'all' })}
+                >
+                  Todas ({items.length})
+                </button>
+              </div>
+
+              <span className="setting-title">Ordem</span>
+              <div className="chips order-chips">
+                {(Object.keys(COLLECTION_ORDER_LABEL) as CollectionOrder[]).map((order) => (
+                  <button
+                    key={order}
+                    className={collectionPlan.order === order ? 'active' : ''}
+                    onClick={() => setCollectionPlan({ ...collectionPlan, order })}
+                  >
+                    {COLLECTION_ORDER_LABEL[order].icon} {COLLECTION_ORDER_LABEL[order].label}
+                  </button>
+                ))}
+              </div>
+              <small>{COLLECTION_ORDER_LABEL[collectionPlan.order].hint}</small>
+
+              <button
+                className="start-collection"
+                onClick={() => {
+                  setOpenCollectionId(null)
+                  startStudy('collection', collection.id, collectionPlan)
+                }}
+              >
+                Revisar {planned} {planned === 1 ? 'card' : 'cards'}
+              </button>
+            </div>
+
+            <p className="section-label">Tudo o que está salvo aqui</p>
+            <ul className="collection-items">
+              {items.map((card) => {
+                const language = detectLanguage(card)
+                return (
+                  <li key={card.id}>
+                    <button className="collection-item" onClick={() => setBrowseId(card.id)}>
+                      <span className="collection-item-text">
+                        {card.text}
+                        <small>
+                          {language === 'fr-FR' ? '🇫🇷' : '🇬🇧'}
+                          {card.source === 'phrases' ? ' frase' : ''} ·{' '}
+                          {card.nextReview ? `caixa ${card.box} · ${card.repetitions}× revisada` : 'ainda não estudada'}
+                        </small>
+                      </span>
+                      <span className="collection-item-translation">{card.translation}</span>
+                    </button>
+                    <button
+                      className="collection-item-listen"
+                      aria-label={`Ouvir ${card.text}`}
+                      onClick={() => speak(card.text, language)}
+                    >
+                      🔊
+                    </button>
+                    <button
+                      className="collection-item-remove"
+                      aria-label={`Tirar ${card.text} da coleção`}
+                      onClick={() => toggleInCollection(collection.id, card.id)}
+                    >
+                      ✕
+                    </button>
+                  </li>
+                )
+              })}
+            </ul>
+          </>
+        )}
+      </div>
+    )
+  }
+
   function renderSummary(record: SessionRecord, title: string) {
     const counts = record.entries.reduce(
       (tally, entry) => {
@@ -1305,6 +1522,75 @@ export default function App() {
             <button className={theme === 'dark' ? 'active' : ''} onClick={() => setTheme('dark')}>
               🌙 Noturno
             </button>
+          </div>
+        </div>
+
+        <div className="setting-block">
+          <span className="setting-title">Voz, sotaque e velocidade</span>
+          <small>
+            As vozes disponíveis são as instaladas no aparelho — cada uma é um sotaque (França, Canadá, EUA,
+            Reino Unido…). No Android dá para baixar mais em Configurações → Idiomas → Saída de texto para
+            fala; no iPhone, em Ajustes → Acessibilidade → Conteúdo Falado → Vozes.
+          </small>
+
+          {(['fr-FR', 'en-US'] as Language[]).map((language) => {
+            const options = voicesFor(voices, language)
+            const sample = language === 'fr-FR' ? 'Bonjour, on révise un peu ?' : 'Hello, let us review a little.'
+            return (
+              <div className="voice-row" key={language}>
+                <label htmlFor={`voice-${language}`}>{language === 'fr-FR' ? '🇫🇷 Francês' : '🇬🇧 Inglês'}</label>
+                <select
+                  id={`voice-${language}`}
+                  value={speech.voices[language]}
+                  disabled={options.length === 0}
+                  onChange={(event) =>
+                    updateSpeech({ ...speech, voices: { ...speech.voices, [language]: event.target.value } })
+                  }
+                >
+                  <option value="">
+                    {options.length ? `Automática (${options.length} disponíveis)` : 'nenhuma voz instalada'}
+                  </option>
+                  {options.map((voice) => (
+                    <option key={voiceKey(voice)} value={voiceKey(voice)}>
+                      {voice.name} · {voice.lang}
+                    </option>
+                  ))}
+                </select>
+                <button className="voice-test" aria-label="Testar voz" onClick={() => speak(sample, language)}>
+                  🔊
+                </button>
+              </div>
+            )
+          })}
+
+          <div className="rate-row">
+            <label htmlFor="speech-rate">Velocidade da fala · {speech.rate.toFixed(2)}×</label>
+            <input
+              id="speech-rate"
+              type="range"
+              min="0.5"
+              max="1.4"
+              step="0.05"
+              value={speech.rate}
+              onChange={(event) => updateSpeech({ ...speech, rate: Number(event.target.value) })}
+            />
+          </div>
+          <div className="chips rate-chips">
+            {[
+              { rate: 0.6, label: '🐢 Bem devagar' },
+              { rate: 0.75, label: 'Devagar' },
+              { rate: 0.9, label: 'Normal' },
+              { rate: 1.1, label: 'Rápido' },
+              { rate: 1.3, label: '🐇 Bem rápido' },
+            ].map((option) => (
+              <button
+                key={option.rate}
+                className={Math.abs(speech.rate - option.rate) < 0.001 ? 'active' : ''}
+                onClick={() => updateSpeech({ ...speech, rate: option.rate })}
+              >
+                {option.label}
+              </button>
+            ))}
           </div>
         </div>
 
@@ -1564,6 +1850,8 @@ export default function App() {
             renderSettings()
           ) : screen === 'stats' ? (
             renderStats()
+          ) : screen === 'collection' && openCollection ? (
+            renderCollection(openCollection)
           ) : status === 'loading' && !cards.length ? (
             <div className="done-state">
               <h2>Carregando cards…</h2>
@@ -1687,8 +1975,10 @@ export default function App() {
                         <div className="collection-row" key={collection.id}>
                           <button
                             className="mode-card collection"
-                            disabled={items.length === 0}
-                            onClick={() => startStudy('collection', collection.id)}
+                            onClick={() => {
+                              setOpenCollectionId(collection.id)
+                              setScreen('collection')
+                            }}
                           >
                             <span className="mode-icon" aria-hidden="true">⭐</span>
                             <strong>{collection.name}</strong>
@@ -1698,7 +1988,7 @@ export default function App() {
                             <small>
                               {items.length === 0
                                 ? 'coleção vazia — salve cards com ☆'
-                                : `${due} para revisar · revisão livre, quando quiser`}
+                                : `${due} para revisar · escolha quantos e a ordem`}
                             </small>
                           </button>
                           <button
@@ -1944,10 +2234,20 @@ export default function App() {
                 <button className="more-new" onClick={() => setScreen('home')}>
                   Voltar ao início
                 </button>
-                {mode && mode !== 'practice' && (
-                  <button className="again" onClick={() => startStudy(mode)}>
-                    Nova sessão
+                {mode === 'collection' && activeCollection ? (
+                  <button
+                    className="again"
+                    onClick={() => startStudy('collection', activeCollection.id, collectionPlan)}
+                  >
+                    Novo bloco desta coleção
                   </button>
+                ) : (
+                  mode &&
+                  mode !== 'practice' && (
+                    <button className="again" onClick={() => startStudy(mode)}>
+                      Nova sessão
+                    </button>
+                  )
                 )}
               </div>
             </div>

@@ -68,10 +68,22 @@ volta (evento `online` + retentativa periódica).
   não encontrada) em vez de um aviso genérico.
 - **Minhas coleções**: salve qualquer palavra ou frase (botão ☆, no verso do
   card ou na ficha) em coleções suas — "Trabalho", "Viagem", o que fizer
-  sentido. Cada coleção vira um bloco no menu e pode ser revisada **a qualquer
-  momento**, sem a espera do agendamento, misturando palavras e frases. As
-  coleções ficam no aparelho (funcionam offline) e as respostas continuam indo
-  para a planilha certa.
+  sentido. Cada coleção tem sua **própria tela**, com:
+  - a **lista completa** do que está salvo (idioma, caixa, quantas vezes você
+    revisou), com áudio e ✕ para tirar da coleção, e toque para abrir a ficha;
+  - **quantos cards** entram no bloco — 5, 10, 20… ou **todas**, sem o limite
+    fixo de 10;
+  - **a ordem**: 🔀 embaralhar (sorteia a cada bloco, para não cair sempre nas
+    mesmas), 🌱 menos vistas primeiro ou ⏱ prioridade de revisão.
+
+  A revisão é livre, **a qualquer momento**, sem esperar o agendamento, e
+  mistura palavras e frases. As coleções ficam no aparelho (funcionam offline)
+  e as respostas continuam indo para a planilha certa.
+- **Voz, sotaque e velocidade** (em Ajustes): escolha a voz de cada idioma
+  entre as instaladas no aparelho — cada uma é um sotaque (França, Canadá,
+  EUA, Reino Unido…) — com botão de teste, e ajuste a velocidade da fala no
+  slider ou nos atalhos (🐢 bem devagar → 🐇 bem rápido). Vale para toda fala
+  do app, inclusive a automática ao abrir o card, e fica salva no aparelho.
 - **Blocos já feitos**: o menu inicial lista o histórico de blocos (modo, data
   e nº de cards); cada bloco expande para mostrar o resultado por expressão
   (difícil/padrão/fácil), e cada expressão reabre a ficha completa.
