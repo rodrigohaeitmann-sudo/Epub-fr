@@ -701,6 +701,95 @@ mark.pickable { background: var(--accent-soft); color: var(--accent-strong); pad
 .collection-count { color: var(--faint); font-size: 12px; font-weight: 700; }
 .new-collection input { background: var(--bg); }
 
+/* ------------------------------------------------------- tela da coleção */
+.collection-screen .setting-block { display: grid; gap: 10px; }
+.collection-screen .setting-title { margin: 0; }
+.collection-summary { margin: -6px 0 16px; color: var(--sub); font-size: 13px; line-height: 1.55; }
+.size-chips button,
+.order-chips button,
+.rate-chips button {
+  padding: 9px 13px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--track);
+  color: var(--sub);
+  font-size: 13px;
+  font-weight: 700;
+}
+.size-chips button.active,
+.order-chips button.active,
+.rate-chips button.active {
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+  border-color: var(--accent-soft2);
+}
+.collection-screen .setting-block small { margin: -4px 0 0; }
+.start-collection {
+  margin-top: 4px;
+  padding: 14px;
+  border-radius: 14px;
+  background: var(--accent);
+  color: var(--accent-text);
+  font-weight: 800;
+  font-size: 15px;
+}
+
+.collection-items { margin: 0; padding: 0; list-style: none; display: grid; gap: 8px; }
+.collection-items li { display: flex; gap: 6px; align-items: stretch; }
+.collection-item {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface);
+  text-align: left;
+  color: var(--text);
+}
+.collection-item-text { font-weight: 700; font-size: 15px; display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.collection-item-text small { color: var(--faint); font-size: 11px; font-weight: 600; }
+.collection-item-translation { color: var(--sub); font-size: 13px; }
+.collection-item-listen,
+.collection-item-remove {
+  flex-shrink: 0;
+  width: 40px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  color: var(--faint);
+  font-size: 14px;
+}
+.collection-item-remove:hover { color: var(--hard); border-color: var(--hard); }
+
+/* ------------------------------------------------------------ voz e fala */
+.voice-row { display: flex; gap: 8px; align-items: center; margin-top: 12px; }
+.voice-row label { flex-shrink: 0; margin: 0; width: 92px; font-size: 13px; }
+.voice-row select {
+  flex: 1;
+  min-width: 0;
+  padding: 11px 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  font-size: 14px;
+}
+.voice-test {
+  flex-shrink: 0;
+  width: 44px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--track);
+  font-size: 15px;
+}
+.rate-row { margin-top: 16px; }
+.rate-row label { margin-bottom: 8px; }
+.rate-row input[type='range'] { width: 100%; accent-color: var(--accent); }
+.rate-chips { margin-top: 10px; }
+
 /* ---------------------------------------------------------------- rodapé */
 .foot { display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; color: var(--faint); font-size: 12px; }
 
