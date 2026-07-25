@@ -57,6 +57,12 @@ volta (evento `online` + retentativa periódica).
   pronúncia em IPA — do card quando a palavra está na planilha, senão tradução
   automática (cacheada para uso offline) e IPA aproximado gerado por regras
   (`src/ipa.ts`).
+- **Minhas coleções**: salve qualquer palavra ou frase (botão ☆, no verso do
+  card ou na ficha) em coleções suas — "Trabalho", "Viagem", o que fizer
+  sentido. Cada coleção vira um bloco no menu e pode ser revisada **a qualquer
+  momento**, sem a espera do agendamento, misturando palavras e frases. As
+  coleções ficam no aparelho (funcionam offline) e as respostas continuam indo
+  para a planilha certa.
 - **Blocos já feitos**: o menu inicial lista o histórico de blocos (modo, data
   e nº de cards); cada bloco expande para mostrar o resultado por expressão
   (difícil/padrão/fácil), e cada expressão reabre a ficha completa.

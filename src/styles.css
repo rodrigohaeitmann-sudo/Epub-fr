@@ -626,6 +626,66 @@ mark.pickable { background: var(--accent-soft); color: var(--accent-strong); pad
 .conj-pt { color: var(--sub); font-size: 13px; }
 .conj-hint { margin: 4px 0 0; color: var(--faint); font-size: 12px; text-align: center; }
 
+/* ---------------------------------------------------------------- coleções */
+.back-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
+.back-actions .conj-button { margin: 0; }
+.collect-button {
+  padding: 11px 14px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--track);
+  color: var(--sub);
+  font-weight: 700;
+  font-size: 14px;
+}
+.collect-button.saved { border-color: var(--accent-soft2); background: var(--accent-soft); color: var(--accent-strong); }
+.browse-actions { display: flex; gap: 8px; align-items: center; }
+
+.collection-row { display: flex; gap: 8px; align-items: stretch; }
+.collection-row .mode-card { flex: 1; }
+.collection-remove {
+  flex-shrink: 0;
+  width: 42px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  color: var(--faint);
+  font-size: 15px;
+}
+.collection-remove:hover { color: var(--hard); border-color: var(--hard); }
+.mode-card.collection .mode-icon { background: var(--accent-soft); }
+
+.study-collection {
+  flex-shrink: 0;
+  color: var(--accent-strong);
+  font-size: 12px;
+  font-weight: 700;
+  max-width: 40%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.collect-sheet .collection-list { margin: 0 0 12px; padding: 0; list-style: none; display: grid; gap: 6px; }
+.collection-list button {
+  width: 100%;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 13px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--track);
+  color: var(--text);
+  text-align: left;
+  font-size: 14px;
+}
+.collection-list button.saved { border-color: var(--accent-soft2); background: var(--accent-soft); color: var(--accent-strong); }
+.collection-name { font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.collection-count { color: var(--faint); font-size: 12px; font-weight: 700; }
+.new-collection input { background: var(--bg); }
+
 /* ---------------------------------------------------------------- rodapé */
 .foot { display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; color: var(--faint); font-size: 12px; }
 
