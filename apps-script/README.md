@@ -34,7 +34,7 @@ A ordem não importa; o script casa pelos nomes (com ou sem acento). Modelo atua
 | `IPA` | pronúncia exibida sob a expressão |
 | `Comentário IPA` | dica de pronúncia (destacada no verso) |
 | `Tradução` | tradução principal (verso) |
-| `Exemplo 1..3` + `Tradução 1..3` | exemplos de uso, cada um com áudio próprio e tradução |
+| `Exemplo 1..N` + `Tradução 1..N` | exemplos de uso, cada um com áudio próprio e tradução — quantos você quiser (o modelo atual usa 9); o app abre com 3 sorteados |
 | `ID` | chave do progresso (ver abaixo) |
 
 O modelo antigo (`Texto`, `Traduções`, `Contexto`, `Fonte`, `Capítulo`) continua
@@ -88,16 +88,18 @@ Agendamento (Leitner): intervalos por caixa `[1, 3, 7, 16, 35, 70, 140]` dias.
 
 ## Exemplos gerados por IA (opcional)
 
-No verso de cada card há o botão **✨ Mais exemplos**. Ele funciona em duas
+No verso de cada card há o botão **✨ Mais exemplos**. Ele funciona em três
 etapas:
 
-1. **Do seu próprio acervo** — procura a palavra nos exemplos dos outros cards
+1. **Da própria planilha** — o card abre com 3 exemplos sorteados entre os que
+   a linha tem (9, no modelo atual); o primeiro toque revela os outros.
+2. **Do seu próprio acervo** — procura a palavra nos exemplos dos outros cards
    e nas frases da planilha de frases. Isso roda no aparelho e **funciona
    offline**, sem configurar nada.
-2. **Geradas na hora** — quando o acervo acaba, o app chama
+3. **Geradas na hora** — quando a planilha e o acervo acabam, o app chama
    `?action=examples` neste script, que pede frases novas ao Gemini.
 
-A etapa 2 só liga se você guardar uma chave:
+A etapa 3 só liga se você guardar uma chave:
 
 1. Pegue uma chave em <https://aistudio.google.com/apikey>.
 2. No editor do Apps Script: **⚙️ Configurações do projeto → Propriedades do

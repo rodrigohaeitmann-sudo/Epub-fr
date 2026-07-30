@@ -40,14 +40,15 @@ volta (evento `online` + retentativa periódica).
 - Tela de estudo com progresso do bloco (`Revisão · 4/10`) e botão ← Menu;
   ao concluir, o bloco é salvo e o resumo aparece na hora, com "Mais um bloco".
 - Verso rico: tradução em destaque, **dica de pronúncia** (Comentário IPA) e
-  até 3 **exemplos de uso**, cada um com a expressão destacada, tradução em
-  português e botão de áudio próprio.
-- **✨ Mais exemplos**: os 3 exemplos da planilha continuam abrindo de saída, e
-  o botão traz frases inéditas a cada toque — primeiro do seu próprio acervo
-  (outros cards e a planilha de frases que usam a palavra, o que **funciona
-  offline**) e, quando ele acaba, geradas na hora pelo Apps Script (requer
-  `GEMINI_API_KEY`, veja [apps-script/README.md](apps-script/README.md)).
-  Assim cada novo contato com a palavra mostra exemplos diferentes.
+  **exemplos de uso**, cada um com a expressão destacada, tradução em português
+  e botão de áudio próprio.
+- **✨ Mais exemplos**: a planilha pode ter quantos exemplos você quiser (o
+  modelo atual tem 9 por palavra) e o card abre com **3 sorteados** — então
+  cada novo contato com a palavra já começa diferente. O botão então revela,
+  em ordem: **os outros da planilha**, depois o que houver no **seu próprio
+  acervo** (outros cards e a planilha de frases que usam a palavra, o que
+  **funciona offline**) e, por fim, frases geradas na hora pelo Apps Script
+  (requer `GEMINI_API_KEY`, veja [apps-script/README.md](apps-script/README.md)).
 - Áudio via Web Speech API: pronúncia da expressão, da frase original e de
   cada exemplo, com voz em inglês ou francês definida pela coluna `Língua`.
 - Filtro por idioma, IPA quando disponível, e "capturado de…" mostrando a
