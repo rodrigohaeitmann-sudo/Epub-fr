@@ -70,6 +70,9 @@ const MODE_LABEL: Record<StudyMode, string> = {
 
 const BLOCK_SIZE = 10
 const SUGGESTED_REVIEW_SHARE = 5
+// A planilha traz até 9 exemplos por palavra; o card abre com 3 sorteados e o
+// botão "Mais exemplos" revela o resto.
+const SHEET_SAMPLE = 3
 
 const SCRIPT_URL_KEY = 'reviewScriptUrl'
 const PENDING_KEY = 'reviewPendingQueue'
@@ -182,6 +185,11 @@ function speak(text: string, language: Language) {
     utterance.lang = voice.lang
   }
   window.speechSynthesis.speak(utterance)
+}
+
+/** Distingue os exemplos que vieram da planilha dos gerados/achados no acervo. */
+function fromSheet(card: Card, example: Example) {
+  return card.examples.some((item) => item.text === example.text)
 }
 
 function shuffle<T>(items: T[]): T[] {
@@ -445,6 +453,27 @@ export default function App() {
   // Cards já reapresentados neste bloco por "pouco tempo": cada um volta uma única vez.
   const requeuedIds = useRef<Set<string>>(new Set())
   const searchInputRef = useRef<HTMLInputElement>(null)
+  // Sorteio dos exemplos por card, guardado num ref para não trocar a cada
+  // re-render (o card ficaria mudando de exemplo enquanto está aberto).
+  const sampleCache = useRef<Map<string, { shown: Example[]; rest: Example[] }>>(new Map())
+
+  /** Rótulo do botão: anuncia quantos exemplos da planilha ainda estão guardados. */
+  function moreExamplesLabel(card: Card) {
+    if (examplesState.loading) return 'buscando…'
+    const shown = new Set((extraExamples[card.id] ?? []).map((example) => normalize(example.text)))
+    const held = exampleSample(card).rest.filter((example) => !shown.has(normalize(example.text))).length
+    return held ? `✨ Ver mais ${held} exemplos da planilha` : '✨ Mais exemplos'
+  }
+
+  /** 3 exemplos sorteados da planilha + os que ficaram guardados para depois. */
+  function exampleSample(card: Card) {
+    const cached = sampleCache.current.get(card.id)
+    if (cached && cached.shown.length + cached.rest.length === card.examples.length) return cached
+    const drawn = shuffle(card.examples)
+    const value = { shown: drawn.slice(0, SHEET_SAMPLE), rest: drawn.slice(SHEET_SAMPLE) }
+    sampleCache.current.set(card.id, value)
+    return value
+  }
 
   const allCards = useMemo(() => [...cards, ...phrases], [cards, phrases])
   const cardsById = useMemo(() => new Map(allCards.map((card) => [card.id, card])), [allCards])
@@ -654,6 +683,23 @@ export default function App() {
     setExamplesState({ loading: false, message: '' })
   }, [activeCard?.id, browseId])
 
+  // A amostra sorteada (e o que já foi revelado por cima dela) só é descartada
+  // quando o card sai da tela: assim os exemplos não trocam sozinhos enquanto
+  // você olha o card, e a próxima visita à mesma palavra cai em outros três.
+  useEffect(() => {
+    const keep = new Set([activeCard?.id, browseId].filter(Boolean) as string[])
+    for (const key of Array.from(sampleCache.current.keys())) {
+      if (!keep.has(key)) sampleCache.current.delete(key)
+    }
+    setExtraExamples((current) => {
+      const stale = Object.keys(current).filter((key) => !keep.has(key))
+      if (!stale.length) return current
+      const next = { ...current }
+      for (const key of stale) delete next[key]
+      return next
+    })
+  }, [activeCard?.id, browseId])
+
   // Sempre que a frente do card aparece (próximo card ou virada de volta),
   // o app fala a palavra/expressão automaticamente.
 
@@ -698,12 +744,24 @@ export default function App() {
   }, [phrases, selectedThemes])
 
   /**
-   * Traz exemplos inéditos para a palavra: primeiro do próprio acervo (outros
-   * cards e frases que a usam — funciona offline), depois do gerador de IA do
+   * Traz exemplos inéditos para a palavra, nesta ordem: os que a planilha tem
+   * mas ficaram fora do sorteio inicial, depois o próprio acervo (outros cards
+   * e frases que a usam — funciona offline) e, por fim, o gerador de IA do
    * Apps Script, se houver chave configurada lá.
    */
   const loadMoreExamples = useCallback(
     async (card: Card) => {
+      const shown = new Set((extraExamples[card.id] ?? []).map((example) => normalize(example.text)))
+      const held = exampleSample(card).rest.filter((example) => !shown.has(normalize(example.text)))
+      if (held.length) {
+        setExtraExamples((current) => ({ ...current, [card.id]: [...(current[card.id] ?? []), ...held] }))
+        setExamplesState({
+          loading: false,
+          message: `+${held.length} ${held.length === 1 ? 'exemplo' : 'exemplos'} da planilha`,
+        })
+        return
+      }
+
       const already = new Set(
         [...card.examples, ...(extraExamples[card.id] ?? [])].map((example) => normalize(example.text)),
       )
@@ -1303,8 +1361,11 @@ export default function App() {
             <h3>
               Exemplos <span className="examples-hint">· toque numa palavra para ouvir ou consultar</span>
             </h3>
-            {[...card.examples, ...(extraExamples[card.id] ?? [])].map((example, index) => (
-              <div className={`example ${index >= card.examples.length ? 'extra' : ''}`} key={`${index}-${example.text}`}>
+            {[...exampleSample(card).shown, ...(extraExamples[card.id] ?? [])].map((example, index) => (
+              <div
+                className={`example ${index >= SHEET_SAMPLE && !fromSheet(card, example) ? 'extra' : ''}`}
+                key={`${index}-${example.text}`}
+              >
                 <div className="example-line">
                   <p
                     className="example-text selectable"
@@ -1326,7 +1387,7 @@ export default function App() {
             ))}
 
             <button className="more-examples" disabled={examplesState.loading} onClick={() => loadMoreExamples(card)}>
-              {examplesState.loading ? 'buscando…' : '✨ Mais exemplos'}
+              {moreExamplesLabel(card)}
             </button>
             {examplesState.message && <p className="examples-status">{examplesState.message}</p>}
           </div>
@@ -2155,8 +2216,8 @@ export default function App() {
                       <h3>
                         Exemplos <span className="examples-hint">· toque numa palavra para consultar</span>
                       </h3>
-                      {[...activeCard.examples, ...(extraExamples[activeCard.id] ?? [])].map((example, index) => {
-                        const isExtra = index >= activeCard.examples.length
+                      {[...exampleSample(activeCard).shown, ...(extraExamples[activeCard.id] ?? [])].map((example, index) => {
+                        const isExtra = index >= SHEET_SAMPLE && !fromSheet(activeCard, example)
                         return (
                           <div className={`example ${isExtra ? 'extra' : ''}`} key={`${index}-${example.text}`}>
                             <div className="example-line">
@@ -2196,7 +2257,7 @@ export default function App() {
                           loadMoreExamples(activeCard)
                         }}
                       >
-                        {examplesState.loading ? 'buscando…' : '✨ Mais exemplos'}
+                        {moreExamplesLabel(activeCard)}
                       </button>
                       {examplesState.message && <p className="examples-status">{examplesState.message}</p>}
                     </div>

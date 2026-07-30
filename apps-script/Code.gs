@@ -7,7 +7,11 @@
  * A PRIMEIRA aba da planilha é a fonte das palavras/expressões e NUNCA é
  * modificada automaticamente. Modelo de colunas atual (a ordem não importa):
  *   ID | Texto original | Expressão | Língua | Tipo | IPA | Comentário IPA |
- *   Tradução | Exemplo 1 | Tradução 1 | Exemplo 2 | Tradução 2 | Exemplo 3 | Tradução 3
+ *   Tradução | Exemplo 1 | Tradução 1 | ... | Exemplo 9 | Tradução 9
+ *
+ * A quantidade de exemplos é livre: o script lê todas as colunas "Exemplo N"
+ * (com a "Tradução N" correspondente) e as devolve em ordem numérica. O app
+ * mostra 3 sorteadas e guarda o resto para o botão "mais exemplos".
  *
  * Compatível também com o modelo antigo (Texto | Tipo | IPA | Traduções | Contexto | ...).
  *
