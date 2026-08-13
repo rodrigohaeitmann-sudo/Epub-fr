@@ -13,6 +13,13 @@ exemplos de uso) e decide quando ela deve voltar:
 - **Médio** — lembrou com esforço: sobe uma caixa (1 → 3 → 7 → 16 → 35 → 70 → 140 dias);
 - **Fácil** — sobe duas caixas.
 
+A resposta vem pelos botões, pelo teclado (`1`/`2`/`3`) ou **deslizando o card**:
+**← fácil**, **↓ médio**, **→ difícil**. Enquanto você arrasta, o card acompanha
+o dedo e um selo mostra qual resposta será registrada — soltar antes do meio do
+caminho cancela. O gesto só vale com o verso à mostra (não dá para avaliar o
+que você ainda não viu) e nunca atrapalha a rolagem da página: arrastar para
+baixo só avalia quando não há o que rolar de volta.
+
 O progresso é gravado por um Google Apps Script na aba `Progresso` da própria
 planilha — a aba de palavras continua dinâmica e nunca é alterada.
 
@@ -94,6 +101,9 @@ volta (evento `online` + retentativa periódica).
   ouvi-la isolada e consultá-la na sua lista: se já for um card, o painel
   mostra a tradução com atalho "ver card"; senão, mostra onde ela aparece e
   oferece a busca completa.
+- **Avaliar deslizando**: com o verso à mostra, arraste o card — **←** fácil,
+  **↓** médio, **→** difícil — com selo de confirmação e o card saindo para o
+  lado escolhido. Os botões e o teclado continuam valendo.
 - Atalhos de teclado: `espaço` revela, `P` ouve, `1`/`2`/`3` respondem,
   `Esc` fecha busca/ficha.
 

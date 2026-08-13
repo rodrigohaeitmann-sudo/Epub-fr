@@ -42,7 +42,15 @@
 }
 
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
-body { min-width: 320px; min-height: 100vh; margin: 0; background: var(--bg); color: var(--text); }
+body {
+  min-width: 320px;
+  min-height: 100vh;
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  /* sem "puxar para recarregar": o arrasto para baixo no card avalia o card */
+  overscroll-behavior-y: contain;
+}
 button, input { font: inherit; color: inherit; }
 button { cursor: pointer; background: none; border: 0; touch-action: manipulation; }
 
@@ -255,7 +263,40 @@ button { cursor: pointer; background: none; border: 0; touch-action: manipulatio
 .study-count { flex-shrink: 0; color: var(--sub); font-size: 13px; font-weight: 600; }
 
 /* card com virada 3D */
-.flipcard { perspective: 1200px; cursor: pointer; }
+.flipcard { perspective: 1200px; cursor: pointer; position: relative; }
+/* Com o verso à mostra o card também é avaliado por arrasto: o `pan-y` deixa
+   o gesto horizontal com o app e a rolagem vertical com o navegador. */
+.flipcard.swipeable { touch-action: pan-y; }
+.flipcard.dragging { cursor: grabbing; user-select: none; }
+.flipcard:not(.dragging) { transition: transform 0.25s cubic-bezier(0.2, 0.8, 0.3, 1), opacity 0.2s ease; }
+.flipcard.flying { opacity: 0; }
+.flipcard.flying.long { transform: translateX(-130%) rotate(-16deg); }
+.flipcard.flying.short { transform: translateX(130%) rotate(16deg); }
+.flipcard.flying.standard { transform: translateY(60%) scale(0.9); }
+
+.swipe-badge {
+  position: absolute;
+  z-index: 2;
+  top: -15px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 7px 16px;
+  border-radius: 99px;
+  border: 1.5px solid currentColor;
+  background: var(--surface);
+  box-shadow: 0 4px 14px rgb(0 0 0 / 0.12);
+  font-size: 14px;
+  font-weight: 800;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  pointer-events: none;
+}
+.swipe-badge.short { color: var(--hard); }
+.swipe-badge.standard { color: var(--accent-strong); }
+.swipe-badge.long { color: var(--easy); }
+
+.swipe-hint { margin: 10px 0 0; text-align: center; color: var(--faint); font-size: 12px; }
+.swipe-hint b { color: var(--sub); font-weight: 700; }
 .flip-inner {
   position: relative;
   display: grid;
@@ -275,6 +316,10 @@ button { cursor: pointer; background: none; border: 0; touch-action: manipulatio
   flex-direction: column;
   min-height: 320px;
 }
+/* Arrastar o card não deve grifar texto — só os trechos em que a seleção é
+   um recurso (exemplos e frase original) continuam selecionáveis. */
+.face { user-select: none; -webkit-user-select: none; }
+.face .selectable { user-select: text; -webkit-user-select: text; }
 .face.back { transform: rotateY(180deg); }
 .flip-inner.flipped .face.front { pointer-events: none; }
 .flip-inner:not(.flipped) .face.back { pointer-events: none; }
