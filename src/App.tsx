@@ -96,6 +96,27 @@ const RESULT_META: Record<ReviewResult, { label: string; key: string }> = {
   long: { label: 'Fácil', key: '3' },
 }
 
+// Gesto de avaliação: ← fácil, ↓ médio, → difícil.
+const SWIPE_ACTIVATE = 12
+const SWIPE_COMMIT = 84
+const SWIPE_ARROW: Record<ReviewResult, string> = { short: '→', standard: '↓', long: '←' }
+
+/** Direção dominante do arrasto, se já passou do ponto de confirmação. */
+function committedResult(dx: number, dy: number): ReviewResult | null {
+  if (Math.abs(dx) > Math.abs(dy)) {
+    if (Math.abs(dx) < SWIPE_COMMIT) return null
+    return dx < 0 ? 'long' : 'short'
+  }
+  if (dy < SWIPE_COMMIT) return null
+  return 'standard'
+}
+
+/** Direção do arrasto em curso — usada só para o aviso na tela. */
+function aimedResult(dx: number, dy: number): ReviewResult | null {
+  if (Math.abs(dx) > Math.abs(dy)) return Math.abs(dx) < SWIPE_ACTIVATE ? null : dx < 0 ? 'long' : 'short'
+  return dy < SWIPE_ACTIVATE ? null : 'standard'
+}
+
 const THEME_KEY = 'revfr-theme'
 
 function initialTheme(): 'light' | 'dark' {
@@ -412,6 +433,8 @@ export default function App() {
   const [blockSize, setBlockSize] = useState(0)
   const [languageFilter, setLanguageFilter] = useState<'all' | Language>('all')
   const [isRevealed, setIsRevealed] = useState(false)
+  const [drag, setDrag] = useState<{ dx: number; dy: number } | null>(null)
+  const [flying, setFlying] = useState<ReviewResult | null>(null)
   const [pendingCount, setPendingCount] = useState(() => loadPending().length)
   const [isOnline, setIsOnline] = useState(() => navigator.onLine)
   const [fromCache, setFromCache] = useState(false)
@@ -1199,6 +1222,107 @@ export default function App() {
     [activeCard, isRevealed, sendReview],
   )
 
+  // ---------------------------------------------------------------- swipe
+  // Com o verso à mostra, arrastar o card avalia: ← fácil, ↓ médio, → difícil.
+  // Os botões continuam valendo — o gesto é um atalho, não a única saída.
+  const dragStart = useRef<{
+    x: number
+    y: number
+    id: number
+    taken: boolean
+    rating: boolean
+    selecting: boolean
+  } | null>(null)
+  const draggedRef = useRef(false)
+  const flyTimer = useRef<number | null>(null)
+
+  function endDrag() {
+    dragStart.current = null
+    setDrag(null)
+  }
+
+  function onCardPointerDown(event: React.PointerEvent<HTMLDivElement>) {
+    if (flying) return
+    if (event.pointerType === 'mouse' && event.button !== 0) return
+    if ((event.target as Element).closest('button')) return
+    draggedRef.current = false
+    dragStart.current = {
+      x: event.clientX,
+      y: event.clientY,
+      id: event.pointerId,
+      taken: false,
+      rating: isRevealed,
+      // Arrasto que começa num trecho selecionável é o usuário grifando texto
+      // para consultar — nesse caso a seleção dele é preservada.
+      selecting: !!(event.target as Element).closest('.selectable'),
+    }
+  }
+
+  function onCardPointerMove(event: React.PointerEvent<HTMLDivElement>) {
+    const start = dragStart.current
+    if (!start || start.id !== event.pointerId) return
+    const dx = event.clientX - start.x
+    const dy = event.clientY - start.y
+
+    if (!start.taken) {
+      if (Math.hypot(dx, dy) < SWIPE_ACTIVATE) return
+      // Arrastar nunca é "tocar": a virada do card fica de fora daqui.
+      draggedRef.current = true
+      // Seleção acidental (fora dos trechos consultáveis) travaria o próximo
+      // toque no card, então some junto com o arrasto.
+      if (!start.selecting) window.getSelection()?.removeAllRanges()
+      // Só o verso avalia; e uma seleção em andamento não vira gesto.
+      if (!start.rating || start.selecting) {
+        dragStart.current = null
+        return
+      }
+      const horizontal = Math.abs(dx) > Math.abs(dy)
+      // Arrastar para baixo só é "médio" quando não há página para rolar de
+      // volta; caso contrário o movimento pertence à rolagem.
+      if (!horizontal && !(dy > 0 && window.scrollY <= 2)) {
+        dragStart.current = null
+        return
+      }
+      start.taken = true
+      event.currentTarget.setPointerCapture(event.pointerId)
+    }
+
+    setDrag({ dx, dy })
+  }
+
+  function onCardPointerUp(event: React.PointerEvent<HTMLDivElement>) {
+    const start = dragStart.current
+    if (!start || start.id !== event.pointerId) return
+    const dx = event.clientX - start.x
+    const dy = event.clientY - start.y
+    const result = start.taken ? committedResult(dx, dy) : null
+    dragStart.current = null
+    if (!result) {
+      setDrag(null)
+      return
+    }
+    // Sai voando na direção do gesto e só então registra a resposta.
+    setDrag({ dx, dy })
+    setFlying(result)
+    flyTimer.current = window.setTimeout(() => {
+      answer(result)
+      setFlying(null)
+      setDrag(null)
+    }, 190)
+  }
+
+  useEffect(() => {
+    return () => {
+      if (flyTimer.current) window.clearTimeout(flyTimer.current)
+    }
+  }, [])
+
+  // Card novo (ou virado de volta): zera qualquer resíduo do gesto anterior.
+  useEffect(() => {
+    dragStart.current = null
+    setDrag(null)
+  }, [activeCard?.id, isRevealed])
+
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
       if (event.target instanceof HTMLInputElement) {
@@ -1745,6 +1869,14 @@ export default function App() {
 
   const progressPercent = blockSize ? Math.min((sessionEntries.length / blockSize) * 100, 100) : 0
 
+  // Enquanto o dedo está no card, ele acompanha o gesto; ao confirmar, sai
+  // voando para o lado escolhido (a classe `flying` cuida da saída).
+  const aiming = drag && !flying ? aimedResult(drag.dx, drag.dy) : flying
+  const swipeStyle: React.CSSProperties | undefined =
+    drag && !flying
+      ? { transform: `translate(${drag.dx}px, ${Math.max(drag.dy, 0)}px) rotate(${drag.dx / 26}deg)` }
+      : undefined
+
   function exitStudy() {
     setScreen('home')
     setQueue([])
@@ -2094,16 +2226,33 @@ export default function App() {
           ) : activeCard ? (
             <>
               <div
-                className="flipcard"
+                className={`flipcard ${isRevealed ? 'swipeable' : ''} ${drag ? 'dragging' : ''} ${
+                  flying ? `flying ${flying}` : ''
+                }`}
+                style={swipeStyle}
+                onPointerDown={onCardPointerDown}
+                onPointerMove={onCardPointerMove}
+                onPointerUp={onCardPointerUp}
+                onPointerCancel={endDrag}
                 onClick={(event) => {
                   // vira só no "momento oportuno": nunca a partir de botões,
-                  // palavras tocáveis ou da área de exemplos (consulta)
+                  // palavras tocáveis ou da área de exemplos (consulta) — e
+                  // nunca no fim de um arrasto de avaliação
+                  if (draggedRef.current) {
+                    draggedRef.current = false
+                    return
+                  }
                   const target = event.target as Element
                   if (target.closest('button, .pickable, .examples, .ipa-tip')) return
                   if (window.getSelection()?.toString().trim()) return
                   setIsRevealed((value) => !value)
                 }}
               >
+                {aiming && (
+                  <span className={`swipe-badge ${aiming}`} aria-hidden="true">
+                    {SWIPE_ARROW[aiming]} {RESULT_META[aiming].label}
+                  </span>
+                )}
                 <div className={`flip-inner ${isRevealed ? 'flipped' : ''}`}>
                   <div className="face front">
                     <div className="card-meta">
@@ -2266,17 +2415,22 @@ export default function App() {
               </div>
 
               {isRevealed && (
-                <div className="review-actions">
-                  {(Object.keys(RESULT_META) as ReviewResult[]).map((result) => {
-                    const days = scheduleDays(activeCard.box, result).days
-                    return (
-                      <button key={result} className={result} onClick={() => answer(result)}>
-                        <strong>{RESULT_META[result].label}</strong>
-                        <small>{days === 1 ? 'volta amanhã' : `volta em ${days} dias`}</small>
-                      </button>
-                    )
-                  })}
-                </div>
+                <>
+                  <div className="review-actions">
+                    {(Object.keys(RESULT_META) as ReviewResult[]).map((result) => {
+                      const days = scheduleDays(activeCard.box, result).days
+                      return (
+                        <button key={result} className={result} onClick={() => answer(result)}>
+                          <strong>{RESULT_META[result].label}</strong>
+                          <small>{days === 1 ? 'volta amanhã' : `volta em ${days} dias`}</small>
+                        </button>
+                      )
+                    })}
+                  </div>
+                  <p className="swipe-hint">
+                    ou deslize o card: <b>← fácil</b> · <b>↓ médio</b> · <b>→ difícil</b>
+                  </p>
+                </>
               )}
             </>
           ) : (
